@@ -300,9 +300,8 @@ async function captureSelfie() {
   const sourceW = video.videoWidth || 720;
   const sourceH = video.videoHeight || 960;
 
-  const maxW = 640;
+  const maxW = 360;
   const scale = Math.min(1, maxW / sourceW);
-
   const w = Math.round(sourceW * scale);
   const h = Math.round(sourceH * scale);
 
@@ -320,16 +319,16 @@ async function captureSelfie() {
     `GPS: ${currentPosition.lat.toFixed(6)}, ${currentPosition.lng.toFixed(6)}`
   ];
 
-  const boxH = 118;
-  ctx.fillStyle = 'rgba(0,0,0,.62)';
+  const boxH = 90;
+  ctx.fillStyle = 'rgba(0,0,0,.65)';
   ctx.fillRect(0, h - boxH, w, boxH);
 
   ctx.fillStyle = '#fff';
-  ctx.font = `${Math.max(20, Math.floor(w / 28))}px sans-serif`;
-  stamp.forEach((s, i) => ctx.fillText(s, 18, h - boxH + 32 + i * 26));
+  ctx.font = '15px sans-serif';
+  stamp.forEach((s, i) => ctx.fillText(s, 10, h - boxH + 22 + i * 20));
 
-  capturedDataUrl = canvas.toDataURL('image/jpeg', 0.58);
-  capturedBlob = await (await fetch(capturedDataUrl)).blob();
+  capturedDataUrl = canvas.toDataURL('image/jpeg', 0.35);
+  capturedBlob = null;
 
   $('preview').src = capturedDataUrl;
   $('preview').classList.remove('hidden');
