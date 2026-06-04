@@ -1,6 +1,6 @@
 /* ระบบลงเวลาออนไลน์ PWA + Firebase
-   เวอร์ชันนี้ไม่ใช้ Firebase Storage
-   รูปถ่ายจะถูกบีบอัดและเก็บใน Firestore โดยตรง */
+   ไม่ใช้ Firebase Storage
+   รูปถ่ายถูกบีบอัดและเก็บใน Firestore โดยตรง */
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -20,6 +20,7 @@ const safeText = (v) =>
 let app, db, auth;
 let currentUser = null;
 let currentEmployee = null;
+
 let companySettings = {
   companyName: 'ระบบลงเวลาออนไลน์',
   officeLat: null,
@@ -28,7 +29,6 @@ let companySettings = {
 };
 
 let mediaStream = null;
-let capturedBlob = null;
 let capturedDataUrl = null;
 let currentPosition = null;
 let lastPayrollRows = [];
@@ -37,6 +37,7 @@ let deferredPrompt = null;
 
 function toast(msg, ms = 2600) {
   const t = $('toast');
+  if (!t) return alert(msg);
   t.textContent = msg;
   t.classList.remove('hidden');
   setTimeout(() => t.classList.add('hidden'), ms);
@@ -44,7 +45,8 @@ function toast(msg, ms = 2600) {
 
 function showPanel(id) {
   ['setupPanel', 'loginPanel', 'employeePanel', 'adminPanel'].forEach(x => {
-    $(x).classList.add('hidden');
+    const el = $(x);
+    if (el) el.classList.add('hidden');
   });
   $(id).classList.remove('hidden');
 }
@@ -64,7 +66,9 @@ function setBusy(btn, busy, text) {
 async function sha256(text) {
   const data = new TextEncoder().encode(text);
   const hash = await crypto.subtle.digest('SHA-256', data);
-  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return [...new Uint8Array(hash)]
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function getFirebaseConfig() {
@@ -97,7 +101,9 @@ async function loadSettings() {
   try {
     const doc = await db.collection('settings').doc('company').get();
     if (doc.exists) companySettings = { ...companySettings, ...doc.data() };
-    $('companyName').textContent = companySettings.companyName || 'ระบบลงเวลาออนไลน์';
+
+    $('companyName').textContent =
+      companySettings.companyName || 'ระบบลงเวลาออนไลน์';
   } catch (e) {
     console.warn(e);
   }
@@ -200,15 +206,16 @@ async function seedAdmin() {
 function logout() {
   stopCamera();
   currentEmployee = null;
-  capturedBlob = null;
   capturedDataUrl = null;
   currentPosition = null;
-  $('loginPin').value = '';
+
+  if ($('loginPin')) $('loginPin').value = '';
   showPanel('loginPanel');
 }
 
 async function showEmployee() {
   showPanel('employeePanel');
+
   $('empName').textContent = currentEmployee.fullName;
   $('empDetail').textContent =
     `${currentEmployee.employeeCode} • ${currentEmployee.department || '-'} • ${currentEmployee.position || '-'}`;
@@ -251,10 +258,12 @@ async function loadMyHistory() {
 async function startCamera() {
   try {
     stopCamera();
+
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user' },
       audio: false
     });
+
     $('camera').srcObject = mediaStream;
   } catch (e) {
     toast('เปิดกล้องไม่ได้: ' + e.message, 5000);
@@ -270,7 +279,9 @@ function stopCamera() {
 
 async function getGPS() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('อุปกรณ์นี้ไม่รองรับ GPS'));
+    if (!navigator.geolocation) {
+      return reject(new Error('อุปกรณ์นี้ไม่รองรับ GPS'));
+    }
 
     navigator.geolocation.getCurrentPosition(
       pos => {
@@ -280,28 +291,37 @@ async function getGPS() {
           accuracy: pos.coords.accuracy
         };
 
-        $('gpsStatus').textContent =
-          `GPS: ${currentPosition.lat.toFixed(6)}, ${currentPosition.lng.toFixed(6)} ±${Math.round(currentPosition.accuracy)}m`;
+        if ($('gpsStatus')) {
+          $('gpsStatus').textContent =
+            `GPS: ${currentPosition.lat.toFixed(6)}, ${currentPosition.lng.toFixed(6)} ±${Math.round(currentPosition.accuracy)}m`;
+        }
 
         resolve(currentPosition);
       },
       err => reject(new Error(err.message || 'ไม่ได้รับอนุญาตตำแหน่ง')),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      }
     );
   });
 }
 
 async function captureSelfie() {
   const video = $('camera');
+
   if (!mediaStream) throw new Error('กรุณาเปิดกล้องก่อน');
+  if (!currentEmployee) throw new Error('กรุณาเข้าสู่ระบบก่อน');
 
   await getGPS();
 
   const sourceW = video.videoWidth || 720;
   const sourceH = video.videoHeight || 960;
 
-  const maxW = 360;
+  const maxW = 260;
   const scale = Math.min(1, maxW / sourceW);
+
   const w = Math.round(sourceW * scale);
   const h = Math.round(sourceH * scale);
 
@@ -319,16 +339,24 @@ async function captureSelfie() {
     `GPS: ${currentPosition.lat.toFixed(6)}, ${currentPosition.lng.toFixed(6)}`
   ];
 
-  const boxH = 90;
-  ctx.fillStyle = 'rgba(0,0,0,.65)';
+  const boxH = 74;
+  ctx.fillStyle = 'rgba(0,0,0,.68)';
   ctx.fillRect(0, h - boxH, w, boxH);
 
   ctx.fillStyle = '#fff';
-  ctx.font = '15px sans-serif';
-  stamp.forEach((s, i) => ctx.fillText(s, 10, h - boxH + 22 + i * 20));
+  ctx.font = '11px sans-serif';
 
-  capturedDataUrl = canvas.toDataURL('image/jpeg', 0.35);
-  capturedBlob = null;
+  stamp.forEach((s, i) => {
+    ctx.fillText(s, 8, h - boxH + 15 + i * 16);
+  });
+
+  capturedDataUrl = canvas.toDataURL('image/jpeg', 0.22);
+
+  const approxBytes = Math.round((capturedDataUrl.length * 3) / 4);
+  if (approxBytes > 650000) {
+    capturedDataUrl = null;
+    throw new Error('รูปยังใหญ่เกินไป กรุณาถ่ายใหม่');
+  }
 
   $('preview').src = capturedDataUrl;
   $('preview').classList.remove('hidden');
@@ -357,6 +385,7 @@ async function clock(type) {
   setBusy(btn, true, 'กำลังบันทึก...');
 
   try {
+    if (!currentEmployee) throw new Error('กรุณาเข้าสู่ระบบใหม่');
     if (!capturedDataUrl) throw new Error('ต้องถ่ายรูปหน้าตัวเองก่อนลงเวลา');
     if (!currentPosition) await getGPS();
 
@@ -370,22 +399,28 @@ async function clock(type) {
         Number(companySettings.officeLat),
         Number(companySettings.officeLng)
       );
+
       inGeo = dist <= Number(companySettings.radiusMeters || 100);
     }
 
-    await db.collection('attendance').add({
+    const now = new Date();
+
+    const attendanceData = {
       employeeId: currentEmployee.id,
       employeeCode: currentEmployee.employeeCode,
       fullName: currentEmployee.fullName,
+
       type,
       source: 'EMPLOYEE',
       dateKey: todayKey(),
 
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      clientTime: new Date().toISOString(),
+      clientTime: now.toISOString(),
+      clientTimeText: fmtDateTime(now),
 
       photoPath: 'firestore-base64',
       photoURL: capturedDataUrl,
+      photoMode: 'base64',
 
       latitude: currentPosition.lat,
       longitude: currentPosition.lng,
@@ -395,7 +430,14 @@ async function clock(type) {
       distanceMeters: dist,
       inGeofence: inGeo,
       userAgent: navigator.userAgent
+    };
+
+    const savePromise = db.collection('attendance').add(attendanceData);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('บันทึกช้าเกินไป กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่')), 20000);
     });
+
+    await Promise.race([savePromise, timeoutPromise]);
 
     await logAudit(type === 'IN' ? 'CLOCK_IN' : 'CLOCK_OUT', {
       employeeCode: currentEmployee.employeeCode,
@@ -403,17 +445,26 @@ async function clock(type) {
       distanceMeters: dist
     });
 
-    capturedBlob = null;
     capturedDataUrl = null;
-    $('preview').classList.add('hidden');
+    currentPosition = null;
+
+    if ($('preview')) {
+      $('preview').removeAttribute('src');
+      $('preview').classList.add('hidden');
+    }
+
+    if ($('gpsStatus')) {
+      $('gpsStatus').textContent = '';
+    }
 
     toast('บันทึกสำเร็จ');
+
     await refreshMyStatus();
     await loadMyHistory();
 
   } catch (e) {
     console.error(e);
-    toast(e.message, 5000);
+    toast('บันทึกไม่สำเร็จ: ' + e.message, 6000);
   } finally {
     setBusy(btn, false);
   }
@@ -435,7 +486,10 @@ async function autoClock() {
 
 function showAdmin() {
   showPanel('adminPanel');
-  $('adminName').textContent = `${currentEmployee.fullName} (${currentEmployee.employeeCode})`;
+
+  $('adminName').textContent =
+    `${currentEmployee.fullName} (${currentEmployee.employeeCode})`;
+
   setDefaultDates();
   fillSettings();
   loadTodayAdmin();
@@ -447,11 +501,11 @@ function setDefaultDates() {
   const t = todayKey();
 
   ['attStart', 'attEnd', 'payStart', 'payEnd', 'corrDate', 'holidayDate'].forEach(id => {
-    $(id).value = t;
+    if ($(id)) $(id).value = t;
   });
 
-  $('payStart').value = t.slice(0, 8) + '01';
-  $('attStart').value = t.slice(0, 8) + '01';
+  if ($('payStart')) $('payStart').value = t.slice(0, 8) + '01';
+  if ($('attStart')) $('attStart').value = t.slice(0, 8) + '01';
 }
 
 function switchTab(tab) {
@@ -480,7 +534,7 @@ async function loadTodayAdmin() {
 function renderAttendanceItem(r, admin) {
   const dt = r.createdAt?.toDate
     ? fmtDateTime(r.createdAt.toDate())
-    : (r.overrideTime || r.clientTime || '-');
+    : (r.overrideTime || r.clientTimeText || r.clientTime || '-');
 
   const geo =
     r.inGeofence === null || r.inGeofence === undefined
@@ -546,16 +600,16 @@ async function loadEmployees() {
 
 function clearEmployeeForm() {
   ['empIdEdit', 'empCode', 'empFullName', 'empDept', 'empPosition', 'empPin'].forEach(id => {
-    $(id).value = '';
+    if ($(id)) $(id).value = '';
   });
 
-  $('empRole').value = 'employee';
-  $('empHourly').value = '0';
-  $('empDaily').value = '0';
-  $('empOt').value = '1.5';
-  $('empStdStart').value = '08:00';
-  $('empStdEnd').value = '17:00';
-  $('empActive').checked = true;
+  if ($('empRole')) $('empRole').value = 'employee';
+  if ($('empHourly')) $('empHourly').value = '0';
+  if ($('empDaily')) $('empDaily').value = '0';
+  if ($('empOt')) $('empOt').value = '1.5';
+  if ($('empStdStart')) $('empStdStart').value = '08:00';
+  if ($('empStdEnd')) $('empStdEnd').value = '17:00';
+  if ($('empActive')) $('empActive').checked = true;
 }
 
 window.editEmployee = async (id) => {
@@ -726,10 +780,10 @@ window.deleteHoliday = async (id) => {
 };
 
 function fillSettings() {
-  $('setCompany').value = companySettings.companyName || '';
-  $('setRadius').value = companySettings.radiusMeters || 100;
-  $('setLat').value = companySettings.officeLat || '';
-  $('setLng').value = companySettings.officeLng || '';
+  if ($('setCompany')) $('setCompany').value = companySettings.companyName || '';
+  if ($('setRadius')) $('setRadius').value = companySettings.radiusMeters || 100;
+  if ($('setLat')) $('setLat').value = companySettings.officeLat || '';
+  if ($('setLng')) $('setLng').value = companySettings.officeLng || '';
 }
 
 async function saveSettings() {
@@ -911,7 +965,7 @@ function exportAttendance() {
     inGeofence: r.inGeofence,
     distanceMeters: r.distanceMeters,
     mapUrl: r.mapUrl,
-    photoURL: r.photoURL,
+    photoMode: r.photoMode || '',
     source: r.source,
     reason: r.reason || ''
   }));
