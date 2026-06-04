@@ -1,3 +1,9 @@
+เตือน: Rules ชุดนี้เป็น Starter สำหรับเริ่มทดสอบระบบ PWA โดยใช้ Anonymous Auth
+เหมาะกับการทดลอง/ธุรกิจขนาดเล็กที่ควบคุมลิงก์ใช้งานเอง แต่ยังไม่ใช่ security ระดับ production เต็มรูปแบบ
+ถ้าจะใช้งานจริงหลายสาขาหรือข้อมูลสำคัญ ควรย้าย logic login ไป Cloud Functions หรือใช้ Firebase Auth รายคน
+
+Firestore Rules:
+--------------------------------------------------
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -21,6 +27,17 @@ service cloud.firestore {
     match /auditLogs/{id} {
       allow read, create: if signedIn();
       allow update, delete: if false;
+    }
+  }
+}
+
+Storage Rules:
+--------------------------------------------------
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /attendance/{allPaths=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }
