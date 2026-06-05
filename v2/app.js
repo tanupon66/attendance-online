@@ -1278,7 +1278,7 @@ setTimeout(rebindV26,50);
    - Manual notifications to user/all
    - User notification history + delete
    ========================= */
-const APP_VERSION_V27 = '2.7.0';
+const APP_VERSION_V27 = '2.7.1';
 companySettings.geofenceMode = companySettings.geofenceMode || 'warn';
 
 function geoModeTextV27(mode){
@@ -1344,8 +1344,26 @@ async function createNotificationV27({target='all', targetEmployee=null, title='
 
 function canSeeNotificationV27(n){
   if(!currentEmployee) return false;
+
+  // user ลบแจ้งเตือนของตัวเองแล้ว ไม่ต้องแสดง
   if((n.hiddenFor || []).includes(currentEmployee.id)) return false;
-  return n.target === 'all' || n.targetEmployeeId === currentEmployee.id || n.targetEmployeeCode === currentEmployee.employeeCode;
+  if((n.deletedFor || []).includes(currentEmployee.id)) return false;
+
+  // รองรับแจ้งเตือนหลาย schema ทั้ง v2.4 เดิมและ v2.7 ใหม่
+  const empId = currentEmployee.id;
+  const empCode = currentEmployee.employeeCode;
+
+  return (
+    n.target === 'all' ||
+    n.target === empId ||
+    n.target === empCode ||
+    n.targetEmployeeId === empId ||
+    n.targetEmployeeCode === empCode ||
+    n.employeeId === empId ||
+    n.employeeCode === empCode ||
+    (Array.isArray(n.employeeIds) && n.employeeIds.includes(empId)) ||
+    (Array.isArray(n.employeeCodes) && n.employeeCodes.includes(empCode))
+  );
 }
 
 function renderNotificationV27(n, mode='user'){
@@ -1367,10 +1385,14 @@ function renderNotificationV27(n, mode='user'){
 async function loadMyNotifications(){
   if(!$('myNotifications') || !currentEmployee) return;
   try{
+    $('myNotifications').innerHTML = '<p class="muted">กำลังโหลดแจ้งเตือน...</p>';
+
+    // ใช้ get() แบบกว้างเพื่อไม่ต้องสร้าง index และเพื่อรองรับข้อมูลแจ้งเตือนเก่าที่ field ไม่เหมือนกัน
     const snap = await db.collection('notifications').get();
     const rows = snap.docs.map(d=>({id:d.id,...d.data()}))
       .filter(canSeeNotificationV27)
       .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+
     $('myNotifications').innerHTML = rows.map(r=>renderNotificationV27(r,'user')).join('') || '<p class="muted">ยังไม่มีแจ้งเตือน</p>';
   }catch(e){
     console.error(e);
@@ -1379,7 +1401,11 @@ async function loadMyNotifications(){
 }
 window.deleteMyNotificationV27 = async function(id){
   if(!currentEmployee) return;
-  await db.collection('notifications').doc(id).update({hiddenFor: firebase.firestore.FieldValue.arrayUnion(currentEmployee.id)});
+  await db.collection('notifications').doc(id).set({
+    hiddenFor: firebase.firestore.FieldValue.arrayUnion(currentEmployee.id),
+    deletedFor: firebase.firestore.FieldValue.arrayUnion(currentEmployee.id),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge:true });
   await loadMyNotifications();
   toast('ลบแจ้งเตือนแล้ว');
 };
