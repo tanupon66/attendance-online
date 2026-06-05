@@ -1,5 +1,5 @@
 'use strict';
-// v2.1.0: แก้โหลดรายชื่อพนักงาน, ลบพนักงาน, ลบข้อมูลเก่า/เคลียร์ log และอ่าน attendance เก่าได้ดีขึ้น
+// v2.5.0: แก้โหลดรายชื่อพนักงาน, ลบพนักงาน, ลบข้อมูลเก่า/เคลียร์ log และอ่าน attendance เก่าได้ดีขึ้น
 const $=id=>document.getElementById(id);
 const pad=n=>String(n).padStart(2,'0');
 const todayKey=()=>new Date().toISOString().slice(0,10);
@@ -9,6 +9,7 @@ const money=n=>Number(n||0).toLocaleString('th-TH',{minimumFractionDigits:2,maxi
 let app,auth,db,currentUser,currentEmployee=null,mediaStream=null,capturedDataUrl=null,currentPosition=null,deferredPrompt=null;
 let companySettings={companyName:'ระบบลงเวลาออนไลน์',officeLat:null,officeLng:null,radiusMeters:100};
 let lastAttendanceRows=[],lastPayrollRows=[],shiftCache=[],benefitCache=[];
+let attendanceDetailMap={};
 
 function toast(msg,ms=3200){const t=$('toast'); if(!t) return alert(msg); t.textContent=msg; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),ms)}
 function showPanel(id){['setupPanel','loginPanel','employeePanel','adminPanel'].forEach(x=>$(x)?.classList.add('hidden')); $(id)?.classList.remove('hidden')}
@@ -198,12 +199,71 @@ async function showEmployee(){
   await loadUserSlipPreview();
 }
 function renderDailyItem(r,admin){
-  const img=r.photoURL?`<img src="${r.photoURL}" class="thumb" loading="lazy">`:'';
+  const detailId = dailyDetailKey(r);
+  attendanceDetailMap[detailId]=r;
+  const img=r.photoURL?`<img src="${r.photoURL}" class="thumb" loading="lazy" alt="attendance photo">`:'';
   const geo=r.inGeofence===null||r.inGeofence===undefined?'':`<span class="badge ${r.inGeofence?'good':'bad'}">${r.inGeofence?'ในพื้นที่':'นอกพื้นที่'} ${r.distanceMeters?Math.round(r.distanceMeters)+'m':''}</span>`;
-  const userPrint=(!admin && currentEmployee && (currentEmployee.payType==='daily'||currentEmployee.payType==='hourly') && r.lastOut) ? `<button class="secondary" onclick="printDailySlip('${r.dateKey}')">พิมพ์ Slip รายวัน</button>` : '';
+  const userPrint=(!admin && currentEmployee && (currentEmployee.payType==='daily'||currentEmployee.payType==='hourly') && r.lastOut) ? `<button class="secondary" onclick="event.stopPropagation();printDailySlip('${r.dateKey}')">พิมพ์ Slip รายวัน</button>` : '';
   const userMonthly=(!admin && currentEmployee?.payType==='monthly') ? `<span class="disabled-note">รายเดือนดูรายละเอียดได้ แต่ปิดพิมพ์</span>` : '';
-  return `<div class="item"><div>${img}<b>${safeText(r.employeeCode)} - ${safeText(r.fullName)}</b><br><span class="muted">${r.dateKey} • เข้า ${r.firstIn?displayTime(r.firstIn).slice(11):'-'} • ออก ${r.lastOut?displayTime(r.lastOut).slice(11):'-'} • ${r.workHours.toFixed(2)} ชม.</span><br>${geo} <span class="badge">${r.records.length} รายการ</span></div><div class="row-actions">${r.mapUrl?`<a href="${r.mapUrl}" target="_blank"><button class="ghost">แผนที่</button></a>`:''}${userPrint}${userMonthly}${admin?`<button class="ghost" onclick="copyText('${r.employeeId}')">คัดลอก ID</button>`:''}</div></div>`;
+  return `<div class="item clickable attendance-clickable" onclick="openAttendanceDetail('${detailId}')">
+    <div>${img}<b>${safeText(r.employeeCode)} - ${safeText(r.fullName)}</b><br>
+      <span class="muted">${r.dateKey} • เข้า ${r.firstIn?displayTime(r.firstIn).slice(11):'-'} • ออก ${r.lastOut?displayTime(r.lastOut).slice(11):'-'} • ${Number(r.workHours||0).toFixed(2)} ชม.</span><br>
+      ${geo} <span class="badge">${r.records?.length||0} รายการ</span>
+    </div>
+    <div class="row-actions" onclick="event.stopPropagation()">
+      ${r.mapUrl?`<a href="${r.mapUrl}" target="_blank"><button class="ghost">แผนที่</button></a>`:''}
+      <button class="ghost" onclick="openAttendanceDetail('${detailId}')">รายละเอียด</button>
+      ${userPrint}${userMonthly}
+      ${admin?`<button class="ghost" onclick="copyText('${r.employeeId||''}')">คัดลอก ID</button>`:''}
+    </div>
+  </div>`;
 }
+function dailyDetailKey(r){return `daily_${String(r.employeeId||r.employeeCode||'unknown').replace(/[^a-zA-Z0-9_-]/g,'_')}_${String(r.dateKey||todayKey()).replace(/[^a-zA-Z0-9_-]/g,'_')}`}
+window.openAttendanceDetail=async function(detailId){
+  try{
+    let r=attendanceDetailMap[detailId];
+    if(!r) throw new Error('ไม่พบข้อมูลรายการนี้ กรุณาโหลดหน้านี้ใหม่');
+    const records=(r.records||[]).slice().sort((a,b)=>recMillis(a)-recMillis(b));
+    const firstPhoto = r.photoURL || records.find(x=>x.photoURL)?.photoURL || '';
+    const firstMap = r.mapUrl || records.find(x=>x.mapUrl)?.mapUrl || '';
+    const inTime = r.firstIn ? displayTime(r.firstIn) : '-';
+    const outTime = r.lastOut ? displayTime(r.lastOut) : '-';
+    const rawHtml = records.length ? records.map(x=>{
+      const type=x.type==='IN'?'เข้างาน':x.type==='OUT'?'ออกงาน':safeText(x.type||'-');
+      const dt=displayTime(x);
+      const photo=x.photoURL?`<img class="raw-photo" src="${x.photoURL}" loading="lazy" alt="raw photo">`:'';
+      const geo=x.inGeofence===null||x.inGeofence===undefined?'ไม่ได้ตรวจ':(x.inGeofence?'ในพื้นที่':'นอกพื้นที่');
+      return `<div class="raw-card">
+        ${photo}
+        <b>${type}</b>
+        <div class="muted">${dt}</div>
+        <div>แหล่งที่มา: ${safeText(x.source||'-')}</div>
+        <div>GPS: ${safeText(x.latitude??'-')}, ${safeText(x.longitude??'-')} ${x.accuracy?`±${Math.round(x.accuracy)}m`:''}</div>
+        <div>พื้นที่: ${safeText(geo)} ${x.distanceMeters?`• ${Math.round(x.distanceMeters)}m`:''}</div>
+        ${x.reason?`<div>เหตุผล: ${safeText(x.reason)}</div>`:''}
+        ${x.mapUrl?`<div><a href="${x.mapUrl}" target="_blank">เปิดแผนที่รายการนี้</a></div>`:''}
+        <div class="muted small">ID: ${safeText(x.id||'')}</div>
+      </div>`;
+    }).join('') : '<p class="muted">ไม่มีรายการดิบ</p>';
+    $('detailTitle').textContent=`${r.employeeCode||'-'} - ${r.fullName||'-'}`;
+    $('detailSub').textContent=`${r.dateKey||'-'} • ${records.length} รายการ`;
+    $('detailBody').innerHTML=`
+      ${firstPhoto?`<img class="detail-photo" src="${firstPhoto}" loading="lazy" alt="attendance photo">`:'<p class="muted">ไม่มีรูปถ่าย</p>'}
+      <div class="detail-grid">
+        <div class="detail-row"><b>พนักงาน</b>${safeText(r.employeeCode||'-')} - ${safeText(r.fullName||'-')}</div>
+        <div class="detail-row"><b>วันที่</b>${safeText(r.dateKey||'-')}</div>
+        <div class="detail-row"><b>เวลาเข้า / ออก</b>เข้า: ${safeText(inTime)}<br>ออก: ${safeText(outTime)}<br>รวม: ${Number(r.workHours||0).toFixed(2)} ชม.</div>
+        <div class="detail-row"><b>พื้นที่</b>${r.inGeofence===null||r.inGeofence===undefined?'ไม่ได้ตรวจ':(r.inGeofence?'อยู่ในพื้นที่':'อยู่นอกพื้นที่')} ${r.distanceMeters?`<br>ระยะห่าง: ${Math.round(r.distanceMeters)} เมตร`:''}</div>
+        <div class="detail-row"><b>แผนที่</b>${firstMap?`<a href="${firstMap}" target="_blank">เปิด Google Maps</a>`:'-'}</div>
+        <div class="detail-row"><b>Employee ID</b><code>${safeText(r.employeeId||'-')}</code></div>
+      </div>
+      <h3 class="detail-section-title">รายการเข้า/ออกทั้งหมดของวันนี้</h3>
+      <div class="raw-list">${rawHtml}</div>`;
+    $('attendanceDetailModal')?.classList.remove('hidden');
+  }catch(e){console.error(e); toast('เปิดรายละเอียดไม่สำเร็จ: '+e.message,6000)}
+};
+window.closeAttendanceDetail=function(){ $('attendanceDetailModal')?.classList.add('hidden') };
+
 async function loadMyHistory(){
   try{const rows=await getAttendanceRows(currentEmployee.id,null,null); const daily=pairAttendance(rows).slice(0,30); $('myHistory').innerHTML=daily.map(r=>renderDailyItem(r,false)).join('')||'<p class="muted">ยังไม่มีประวัติ</p>'}
   catch(e){console.error(e); $('myHistory').innerHTML=`<p class="muted">โหลดประวัติไม่สำเร็จ: ${safeText(e.message)}</p>`}

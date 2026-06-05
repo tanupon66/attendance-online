@@ -262,6 +262,21 @@
     </section>
   </main>
 
+
+  <div id="attendanceDetailModal" class="modal hidden">
+    <div class="modal-backdrop" onclick="closeAttendanceDetail()"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <h2 id="detailTitle">รายละเอียดการลงเวลา</h2>
+          <p id="detailSub" class="muted"></p>
+        </div>
+        <button class="ghost" onclick="closeAttendanceDetail()">ปิด</button>
+      </div>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
