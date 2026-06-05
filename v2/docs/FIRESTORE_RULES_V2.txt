@@ -1,4 +1,4 @@
-Firestore Rules สำหรับ V2 เริ่มต้นทดสอบ
+Firestore Rules สำหรับ V2.1 เริ่มต้นทดสอบ
 ใส่ที่ Firebase Console > Build > Firestore Database > Rules แล้วกด Publish
 
 rules_version = '2';
@@ -6,7 +6,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     match /{document=**} {
-      allow read, write: if signedIn();
+      allow read, write, create, update, delete: if signedIn();
     }
   }
 }
