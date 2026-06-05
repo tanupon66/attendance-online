@@ -271,3 +271,277 @@ function bind(){
   on('refreshTodayBtn',loadTodayAdmin); on('saveEmployeeBtn',saveEmployee); on('clearEmployeeBtn',clearEmployeeForm); on('loadAttendanceBtn',loadAttendance); on('saveCorrectionBtn',saveCorrection); on('exportAttendanceBtn',exportAttendance); on('saveShiftBtn',saveShift); on('clearShiftBtn',clearShift); on('loadOtBtn',loadOt); on('loadLeaveBtn',loadLeave); on('saveCalendarBtn',saveCalendar); on('loadCalendarBtn',loadCalendar); on('saveBenefitBtn',saveBenefit); on('runPayrollBtn',runPayroll); on('exportPayrollBtn',exportPayroll); on('exportPayrollSlipCsvBtn',exportPayrollSlipCsv); on('setCurrentPayPeriodBtn',setCurrentPayPeriod); on('useCurrentLocationBtn',()=>useCurrentLocation().catch(e=>toast(e.message,5000))); on('saveSettingsBtn',saveSettings); on('clearAttendanceBtn',()=>deleteCollection('attendance')); on('clearAuditBtn',()=>deleteCollection('auditLogs')); on('loadAuditBtn',loadAudit);
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('installBtn')?.classList.remove('hidden')}); on('installBtn',async()=>{if(deferredPrompt){deferredPrompt.prompt(); deferredPrompt=null; $('installBtn')?.classList.add('hidden')}})
 }
+
+/* =========================
+   v2.3.0 payroll fixes
+   - show all active employees in payroll, even when pay is 0
+   - deduct break minutes before calculating normal hours/OT base
+   - monthly employees show details but print disabled
+   - daily/hourly print slip only after closed work day
+   - detailed payroll summary + clearer CSV
+   ========================= */
+function payrollWorkingHours(rawHours, shift){
+  const breakHours = Number(shift?.breakMinutes || 0) / 60;
+  return Math.max(0, Number(rawHours || 0) - breakHours);
+}
+function payrollRowStatus(r){
+  if(r.payType === 'monthly') return 'รายเดือน: แสดงรายละเอียดเงินเดือน แต่ปิดการพิมพ์ Slip';
+  if(r.workDays <= 0) return 'ยังไม่มีวันทำงานในงวดนี้';
+  if(!r.hasClosedWork) return 'มีเวลาเข้าแต่ยังไม่มีเวลาออก';
+  return 'พร้อมจ่าย';
+}
+function canPrintSlip(row){
+  return row.payType !== 'monthly' && row.hasClosedWork === true && row.workDays > 0;
+}
+function slipDisabledReason(row){
+  if(row.payType === 'monthly') return 'รายเดือน: แสดงรายละเอียดได้ แต่ปิดการพิมพ์ตามนโยบาย';
+  if(row.workDays <= 0) return 'ยังไม่มีข้อมูลเข้างานในงวดนี้';
+  if(row.hasClosedWork === false) return 'ยังไม่มีเวลาออกงาน จึงยังพิมพ์ไม่ได้';
+  return '';
+}
+function calcPayroll(e, rows, ots, benefits, start, end){
+  const daily = pairAttendance(rows);
+  const shift = getShift(e.shiftId);
+  let workDays = 0;
+  let regularHours = 0;
+  let rawHours = 0;
+  let breakHoursTotal = 0;
+  let lateMinutes = 0;
+  const dailyDetails = [];
+
+  daily.forEach(d => {
+    if(!d.firstIn || !d.lastOut){
+      dailyDetails.push({
+        dateKey: d.dateKey,
+        clockIn: d.firstIn ? displayTime(d.firstIn) : '',
+        clockOut: d.lastOut ? displayTime(d.lastOut) : '',
+        rawHours: Number(d.workHours || 0),
+        breakHours: 0,
+        workHours: 0,
+        regularHours: 0,
+        lateMinutes: 0,
+        closed: false
+      });
+      return;
+    }
+
+    workDays++;
+    const raw = Number(d.workHours || 0);
+    const breakH = Math.min(raw, Number(shift?.breakMinutes || 0) / 60);
+    const hrs = payrollWorkingHours(raw, shift);
+    const regular = Math.min(hrs, Number(shift?.regularHours || 8));
+
+    rawHours += raw;
+    breakHoursTotal += breakH;
+    regularHours += regular;
+
+    let late = 0;
+    if(shift?.start){
+      const std = new Date(`${d.dateKey}T${shift.start}:00`);
+      const actual = recTime(d.firstIn);
+      if(actual && actual > std) late = Math.round((actual - std) / 60000);
+    }
+    lateMinutes += late;
+
+    dailyDetails.push({
+      dateKey: d.dateKey,
+      clockIn: displayTime(d.firstIn),
+      clockOut: displayTime(d.lastOut),
+      rawHours: raw,
+      breakHours: breakH,
+      workHours: hrs,
+      regularHours: regular,
+      lateMinutes: late,
+      closed: true
+    });
+  });
+
+  const payType = e.payType || 'hourly';
+  const payCycle = e.payCycle || 'monthly';
+  const monthlySalary = Number(e.monthlySalary || 0);
+  const dailyRate = Number(e.dailyRate || 0);
+  const hourlyRate = Number(e.hourlyRate || 0) || (dailyRate / 8) || (monthlySalary / 30 / 8) || 0;
+
+  const approvedOtHours = ots.reduce((s,o)=>s + Number(o.hours || 0), 0);
+  let basePay = 0;
+  if(payType === 'monthly') basePay = payCycle === 'biweekly' ? monthlySalary / 2 : monthlySalary;
+  else if(payType === 'daily') basePay = workDays * dailyRate;
+  else basePay = regularHours * hourlyRate;
+
+  const otPay = approvedOtHours * hourlyRate * Number(e.otMultiplier || 1.5);
+  const benefitLines = benefits.map(b => ({
+    name: b.name || '',
+    mode: b.mode,
+    amount: Number(b.amount || 0),
+    total: b.mode === 'perWorkday' ? Number(b.amount || 0) * workDays : Number(b.amount || 0)
+  }));
+  const benefitsPay = benefitLines.reduce((s,b)=>s+b.total,0);
+  const lateDeduction = lateMinutes * (hourlyRate / 60);
+  const grossPay = basePay + otPay + benefitsPay;
+  const netPay = grossPay - lateDeduction;
+  const payDate = payCycle === 'biweekly' ? computeBiweeklyPayDate(start,end) : computeMonthlyPayDate(start,end);
+  const hasClosedWork = daily.some(x => x.lastOut);
+
+  const row = {
+    employeeId:e.id,
+    employeeCode:e.employeeCode || '',
+    fullName:e.fullName || '',
+    department:e.department || '',
+    payType,
+    payCycle,
+    periodStart:start,
+    periodEnd:end,
+    payDate,
+    shiftName: shift?.name || '',
+    shiftStart: shift?.start || '',
+    shiftEnd: shift?.end || '',
+    shiftBreakMinutes: Number(shift?.breakMinutes || 0),
+    workDays,
+    rawHours,
+    breakHours: breakHoursTotal,
+    regularHours,
+    approvedOtHours,
+    lateMinutes,
+    hourlyRate,
+    dailyRate,
+    monthlySalary,
+    basePay,
+    otPay,
+    benefitsPay,
+    benefitLines,
+    lateDeduction,
+    grossPay,
+    netPay,
+    dailyDetails,
+    hasClosedWork
+  };
+  row.statusText = payrollRowStatus(row);
+  return row;
+}
+async function runPayroll(){
+  const start = $('payStart').value;
+  const end = $('payEnd').value;
+  const box = $('payrollList');
+  if(!start || !end){ toast('กรุณาเลือกวันเริ่มต้นและวันสิ้นสุด'); return; }
+  box.innerHTML = '<p class="muted">กำลังคำนวณ payroll...</p>';
+  try{
+    const [empSnap,attSnap,otSnap,benefitsSnap] = await Promise.all([
+      db.collection('employees').get(),
+      db.collection('attendance').where('dateKey','>=',start).where('dateKey','<=',end).get(),
+      db.collection('otRequests').where('dateKey','>=',start).where('dateKey','<=',end).where('status','==','approved').get(),
+      db.collection('benefits').where('active','==',true).get()
+    ]);
+    const employees = empSnap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role !== 'admin' && e.active !== false);
+    const records = attSnap.docs.map(d=>normalizeAttendance(d.id,d.data()));
+    const ots = otSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const benefits = benefitsSnap.docs.map(d=>({id:d.id,...d.data()}));
+    await getShifts();
+
+    lastPayrollRows = employees.map(e => calcPayroll(
+      e,
+      records.filter(r => r.employeeId === e.id || r.employeeCode === e.employeeCode),
+      ots.filter(o => o.employeeId === e.id || o.employeeCode === e.employeeCode),
+      benefits,
+      start,
+      end
+    ));
+
+    const totalBase = lastPayrollRows.reduce((s,r)=>s+r.basePay,0);
+    const totalOt = lastPayrollRows.reduce((s,r)=>s+r.otPay,0);
+    const totalBenefits = lastPayrollRows.reduce((s,r)=>s+r.benefitsPay,0);
+    const totalDeduct = lastPayrollRows.reduce((s,r)=>s+r.lateDeduction,0);
+    const totalNet = lastPayrollRows.reduce((s,r)=>s+r.netPay,0);
+
+    const summary = `<div class="payroll-summary">
+      <div class="stat"><b>${lastPayrollRows.length}</b><span>พนักงาน</span></div>
+      <div class="stat"><b>${money(totalBase)}</b><span>ฐานเงิน</span></div>
+      <div class="stat"><b>${money(totalOt)}</b><span>OT อนุมัติ</span></div>
+      <div class="stat"><b>${money(totalBenefits)}</b><span>สวัสดิการ</span></div>
+      <div class="stat"><b>${money(totalDeduct)}</b><span>หักสาย</span></div>
+      <div class="stat strong"><b>${money(totalNet)}</b><span>ยอดสุทธิต้องจ่าย</span></div>
+    </div>`;
+
+    const info = `<p class="muted">งวด ${start} ถึง ${end} • พบพนักงาน ${employees.length} คน • พบเวลาเข้าออก ${records.length} รายการ • OT อนุมัติ ${ots.length} รายการ</p>`;
+
+    const rowsHtml = lastPayrollRows.map(r=>{
+      const print = canPrintSlip(r)
+        ? `<button class="secondary" onclick="printSlip('${r.employeeId}')">พิมพ์ Slip</button>`
+        : `<span class="disabled-note">${safeText(slipDisabledReason(r) || r.statusText)}</span>`;
+      const detail = (r.dailyDetails || []).map(d=>`<div class="mini-row">${safeText(d.dateKey)} • เข้า ${safeText((d.clockIn||'').slice(11)||'-')} • ออก ${safeText((d.clockOut||'').slice(11)||'-')} • ทำงานสุทธิ ${Number(d.workHours||0).toFixed(2)} ชม. • พัก ${Number(d.breakHours||0).toFixed(2)} ชม.</div>`).join('') || '<div class="mini-row muted">ไม่มีรายการเข้าออกในงวดนี้</div>';
+      return `<div class="item payroll-item">
+        <b>${safeText(r.employeeCode)} ${safeText(r.fullName)}</b>
+        <span class="badge">${safeText(payTypeText(r.payType))}</span>
+        <span class="badge">${r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'}</span><br>
+        <span class="muted">งวด ${r.periodStart} ถึง ${r.periodEnd} • วันเงินออก ${r.payDate} • กะ ${safeText(r.shiftName||'-')} • พัก ${r.shiftBreakMinutes} นาที</span><br>
+        <div class="pay-line">วันทำงาน <b>${r.workDays}</b> • ชั่วโมงรวม ${r.rawHours.toFixed(2)} • หักพัก ${r.breakHours.toFixed(2)} • ปกติ ${r.regularHours.toFixed(2)} • OT อนุมัติ ${r.approvedOtHours.toFixed(2)} • สาย ${r.lateMinutes} นาที</div>
+        <div class="pay-total">ฐาน ${money(r.basePay)} + OT ${money(r.otPay)} + สวัสดิการ ${money(r.benefitsPay)} - หักสาย ${money(r.lateDeduction)} = <b>${money(r.netPay)} บาท</b></div>
+        <details><summary>รายละเอียดรายวัน</summary>${detail}</details>
+        <div class="row-actions">${print}</div>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = summary + info + (rowsHtml || '<p class="muted">ไม่พบพนักงานที่เปิดใช้งาน</p>');
+    await logAudit('RUN_PAYROLL',{start,end,employees:employees.length,attendance:records.length,totalNet});
+  }catch(e){
+    console.error(e);
+    box.innerHTML = `<p class="muted">คำนวณ payroll ไม่สำเร็จ: ${safeText(e.message)}</p>`;
+    toast('คำนวณ payroll ไม่สำเร็จ: ' + e.message, 7000);
+  }
+}
+function exportPayroll(){
+  exportCsv(`payroll-detailed-${todayKey()}.csv`, lastPayrollRows.map(r=>({
+    employeeCode:r.employeeCode,
+    fullName:r.fullName,
+    department:r.department,
+    payType:payTypeText(r.payType),
+    payCycle:r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน',
+    periodStart:r.periodStart,
+    periodEnd:r.periodEnd,
+    payDate:r.payDate,
+    shiftName:r.shiftName,
+    shiftStart:r.shiftStart,
+    shiftEnd:r.shiftEnd,
+    shiftBreakMinutes:r.shiftBreakMinutes,
+    workDays:r.workDays,
+    rawHours:r.rawHours.toFixed(2),
+    breakHours:r.breakHours.toFixed(2),
+    regularHours:r.regularHours.toFixed(2),
+    approvedOtHours:r.approvedOtHours.toFixed(2),
+    lateMinutes:r.lateMinutes,
+    hourlyRate:r.hourlyRate,
+    dailyRate:r.dailyRate,
+    monthlySalary:r.monthlySalary,
+    basePay:r.basePay,
+    otPay:r.otPay,
+    benefitsPay:r.benefitsPay,
+    lateDeduction:r.lateDeduction,
+    grossPay:r.grossPay,
+    netPay:r.netPay,
+    status:r.statusText,
+    printAllowed:canPrintSlip(r),
+    printNote:slipDisabledReason(r)
+  })));
+}
+function exportPayrollSlipCsv(){
+  const rows=[];
+  lastPayrollRows.forEach(r=>{
+    rows.push({lineType:'SUMMARY',employeeCode:r.employeeCode,fullName:r.fullName,periodStart:r.periodStart,periodEnd:r.periodEnd,payDate:r.payDate,payType:payTypeText(r.payType),payCycle:r.payCycle,basePay:r.basePay,otPay:r.otPay,benefitsPay:r.benefitsPay,lateDeduction:r.lateDeduction,netPay:r.netPay,status:r.statusText});
+    (r.dailyDetails||[]).forEach(d=>rows.push({lineType:'DAY',employeeCode:r.employeeCode,fullName:r.fullName,date:d.dateKey,clockIn:d.clockIn,clockOut:d.clockOut,rawHours:d.rawHours,breakHours:d.breakHours,workHours:d.workHours,regularHours:d.regularHours,lateMinutes:d.lateMinutes,closed:d.closed}));
+    (r.benefitLines||[]).forEach(b=>rows.push({lineType:'BENEFIT',employeeCode:r.employeeCode,fullName:r.fullName,description:b.name,mode:b.mode,rate:b.amount,amount:b.total}));
+  });
+  exportCsv(`payroll-slip-lines-${todayKey()}.csv`,rows);
+}
+function printSlipHtml(r,isUser=false){
+  const dailyRows=(r.dailyDetails||[]).map(d=>`<tr><td>${safeText(d.dateKey)}</td><td>${safeText(d.clockIn||'')}</td><td>${safeText(d.clockOut||'')}</td><td class="right">${Number(d.rawHours||0).toFixed(2)}</td><td class="right">${Number(d.breakHours||0).toFixed(2)}</td><td class="right">${Number(d.workHours||0).toFixed(2)}</td><td class="right">${Number(d.lateMinutes||0)}</td></tr>`).join('') || '<tr><td colspan="7">ไม่มีรายการรายวัน</td></tr>';
+  const benefitRows=(r.benefitLines||[]).map(b=>`<tr><td>${safeText(b.name)}</td><td>${b.mode==='perWorkday'?'ตามวันทำงาน':'Fix รายเดือน'}</td><td class="right">${money(b.total)}</td></tr>`).join('')||'<tr><td colspan="3">-</td></tr>';
+  const w=window.open('','_blank');
+  w.document.write(`<html><head><title>Payroll Slip</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:24px;color:#111827}h2,h3,p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:10px 0}td,th{border:1px solid #ddd;padding:8px;text-align:left}.right{text-align:right}.muted{color:#64748b}.net{font-size:20px}@media print{button{display:none}}</style></head><body><h2>Payroll Slip</h2><p>${safeText(companySettings.companyName||'')}</p><p class="muted">${isUser?'พนักงานพิมพ์เอง':'ออกโดยผู้ดูแลระบบ'} • ${safeText(r.statusText||'')}</p><table><tr><th>พนักงาน</th><td>${safeText(r.employeeCode)} ${safeText(r.fullName)}</td></tr><tr><th>งวด</th><td>${r.periodStart} ถึง ${r.periodEnd}</td></tr><tr><th>วันเงินออก</th><td>${r.payDate}</td></tr><tr><th>วิธีจ่าย</th><td>${payTypeText(r.payType)} / ${r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'}</td></tr><tr><th>กะ</th><td>${safeText(r.shiftName||'-')} / พัก ${r.shiftBreakMinutes||0} นาที</td></tr></table><h3>รายละเอียดเวลา</h3><table><tr><th>วันที่</th><th>เข้า</th><th>ออก</th><th>ชม.รวม</th><th>พัก</th><th>ชม.สุทธิ</th><th>สาย</th></tr>${dailyRows}</table><h3>สรุปรายได้</h3><table><tr><th>ฐานเงิน</th><td class="right">${money(r.basePay)}</td></tr><tr><th>OT อนุมัติ ${r.approvedOtHours.toFixed(2)} ชม.</th><td class="right">${money(r.otPay)}</td></tr><tr><th>สวัสดิการ</th><td class="right">${money(r.benefitsPay)}</td></tr><tr><th>หักสาย</th><td class="right">${money(r.lateDeduction)}</td></tr><tr><th>สุทธิ</th><td class="right net"><b>${money(r.netPay)}</b></td></tr></table><h3>สวัสดิการ</h3><table><tr><th>ชื่อ</th><th>วิธีคิด</th><th>ยอด</th></tr>${benefitRows}</table><button onclick="window.print()">พิมพ์</button><script>setTimeout(()=>window.print(),500)<\/script></body></html>`);
+  w.document.close();
+}
+function rebindPayrollV23(){
+  if($('runPayrollBtn')) $('runPayrollBtn').onclick = runPayroll;
+  if($('exportPayrollBtn')) $('exportPayrollBtn').onclick = exportPayroll;
+  if($('exportPayrollSlipCsvBtn')) $('exportPayrollSlipCsvBtn').onclick = exportPayrollSlipCsv;
+  if($('setCurrentPayPeriodBtn')) $('setCurrentPayPeriodBtn').onclick = setCurrentPayPeriod;
+}
+rebindPayrollV23();
