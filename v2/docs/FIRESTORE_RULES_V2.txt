@@ -1,0 +1,15 @@
+Firestore Rules สำหรับ V2 เริ่มต้นทดสอบ
+ใส่ที่ Firebase Console > Build > Firestore Database > Rules แล้วกด Publish
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    match /{document=**} {
+      allow read, write: if signedIn();
+    }
+  }
+}
+
+หมายเหตุ: Rules นี้เปิดกว้างสำหรับการทดสอบด้วย Anonymous Auth เท่านั้น
+ใช้งานจริงควรย้ายระบบ login/PIN ไป Cloud Functions หรือใช้ Firebase Auth รายคน
