@@ -1270,3 +1270,265 @@ function rebindV26(){
   if($('exportPayrollBtn')) $('exportPayrollBtn').onclick=exportPayroll;
 }
 setTimeout(rebindV26,50);
+
+/* =========================
+   v2.7 upgrades
+   - Geofence mode: allow / warn / block
+   - Dashboard daily summary with alerts
+   - Manual notifications to user/all
+   - User notification history + delete
+   ========================= */
+const APP_VERSION_V27 = '2.7.0';
+companySettings.geofenceMode = companySettings.geofenceMode || 'warn';
+
+function geoModeTextV27(mode){
+  return mode === 'block' ? 'บังคับอยู่ในพื้นที่เท่านั้น' : mode === 'allow' ? 'อนุญาตทุกที่' : 'เตือนเมื่ออยู่นอกพื้นที่';
+}
+function notificationLevelTextV27(level){
+  return level === 'danger' ? 'สำคัญ' : level === 'warning' ? 'เตือน' : level === 'success' ? 'สำเร็จ' : 'ทั่วไป';
+}
+function ntimeV27(x){ return x?.toDate ? fmtDateTime(x.toDate()) : (x?.seconds ? fmtDateTime(new Date(x.seconds*1000)) : '-'); }
+
+const _loadSettingsBeforeV27 = loadSettings;
+loadSettings = async function(){
+  await _loadSettingsBeforeV27();
+  companySettings.geofenceMode = companySettings.geofenceMode || 'warn';
+  if($('setGeoMode')) $('setGeoMode').value = companySettings.geofenceMode;
+};
+
+const _fillSettingsBeforeV27 = typeof fillSettings === 'function' ? fillSettings : null;
+fillSettings = function(){
+  if(_fillSettingsBeforeV27) _fillSettingsBeforeV27();
+  if($('setGeoMode')) $('setGeoMode').value = companySettings.geofenceMode || 'warn';
+};
+
+saveSettings = async function(){
+  companySettings = {
+    companyName: $('setCompany').value.trim() || 'ระบบลงเวลาออนไลน์',
+    radiusMeters: Number($('setRadius').value || 100),
+    officeLat: $('setLat').value ? Number($('setLat').value) : null,
+    officeLng: $('setLng').value ? Number($('setLng').value) : null,
+    monthlyPayDay: Number($('setMonthlyPayDay')?.value || 30),
+    biweeklyStartDate: $('setBiweeklyStart')?.value || todayKey(),
+    geofenceMode: $('setGeoMode')?.value || 'warn'
+  };
+  await db.collection('settings').doc('company').set({
+    ...companySettings,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    appVersion: APP_VERSION_V27
+  }, { merge:true });
+  await logAudit('UPDATE_SETTINGS_V27', companySettings);
+  await loadSettings();
+  toast('บันทึกตั้งค่าแล้ว');
+};
+
+async function createNotificationV27({target='all', targetEmployee=null, title='', message='', level='info', meta={}}){
+  if(!title && !message) throw new Error('กรุณากรอกหัวข้อหรือข้อความ');
+  const doc = {
+    target,
+    targetEmployeeId: targetEmployee?.id || '',
+    targetEmployeeCode: targetEmployee?.employeeCode || '',
+    targetEmployeeName: targetEmployee?.fullName || '',
+    title: title || 'แจ้งเตือน',
+    message: message || '',
+    level,
+    meta,
+    hiddenFor: [],
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: currentEmployee?.employeeCode || 'system',
+    createdByName: currentEmployee?.fullName || ''
+  };
+  await db.collection('notifications').add(doc);
+  await logAudit('SEND_NOTIFICATION_V27', {target, targetEmployeeCode: doc.targetEmployeeCode, title: doc.title, level});
+}
+
+function canSeeNotificationV27(n){
+  if(!currentEmployee) return false;
+  if((n.hiddenFor || []).includes(currentEmployee.id)) return false;
+  return n.target === 'all' || n.targetEmployeeId === currentEmployee.id || n.targetEmployeeCode === currentEmployee.employeeCode;
+}
+
+function renderNotificationV27(n, mode='user'){
+  const cls = safeText(n.level || 'info');
+  const dt = n.createdAt?.toDate ? fmtDateTime(n.createdAt.toDate()) : '-';
+  const target = n.target === 'all' ? 'ทุกคน' : `${safeText(n.targetEmployeeCode || '')} ${safeText(n.targetEmployeeName || '')}`;
+  const adminTarget = mode === 'admin' ? `<br><span class="muted">ส่งถึง: ${target}</span>` : '';
+  const delBtn = mode === 'admin'
+    ? `<button class="danger" onclick="deleteNotificationAdminV27('${n.id}')">ลบ</button>`
+    : `<button class="danger" onclick="deleteMyNotificationV27('${n.id}')">ลบจากของฉัน</button>`;
+  return `<div class="item notice-card ${cls}">
+    <div class="notice-title">${safeText(n.title || 'แจ้งเตือน')} <span class="badge ${cls}">${notificationLevelTextV27(n.level)}</span></div>
+    <div class="notice-message">${safeText(n.message || '')}</div>
+    <span class="muted">${dt} • โดย ${safeText(n.createdByName || n.createdBy || '-')}</span>${adminTarget}
+    <div class="row-actions">${delBtn}</div>
+  </div>`;
+}
+
+async function loadMyNotifications(){
+  if(!$('myNotifications') || !currentEmployee) return;
+  try{
+    const snap = await db.collection('notifications').get();
+    const rows = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(canSeeNotificationV27)
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    $('myNotifications').innerHTML = rows.map(r=>renderNotificationV27(r,'user')).join('') || '<p class="muted">ยังไม่มีแจ้งเตือน</p>';
+  }catch(e){
+    console.error(e);
+    $('myNotifications').innerHTML = `<p class="muted">โหลดแจ้งเตือนไม่สำเร็จ: ${safeText(e.message)}</p>`;
+  }
+}
+window.deleteMyNotificationV27 = async function(id){
+  if(!currentEmployee) return;
+  await db.collection('notifications').doc(id).update({hiddenFor: firebase.firestore.FieldValue.arrayUnion(currentEmployee.id)});
+  await loadMyNotifications();
+  toast('ลบแจ้งเตือนแล้ว');
+};
+
+async function fillNotificationTargetsV27(){
+  if(!$('noticeTarget')) return;
+  const old = $('noticeTarget').value || 'all';
+  const snap = await db.collection('employees').get();
+  const rows = snap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role!=='admin' && e.active!==false).sort((a,b)=>String(a.employeeCode||'').localeCompare(String(b.employeeCode||'')));
+  $('noticeTarget').innerHTML = `<option value="all">ทุกคน</option>` + rows.map(e=>`<option value="${e.id}">${safeText(e.employeeCode)} - ${safeText(e.fullName)}</option>`).join('');
+  if([...$('noticeTarget').options].some(o=>o.value===old)) $('noticeTarget').value = old;
+}
+async function sendNoticeV27(){
+  try{
+    const target = $('noticeTarget')?.value || 'all';
+    const title = $('noticeTitle')?.value.trim() || '';
+    const message = $('noticeMessage')?.value.trim() || '';
+    const level = $('noticeLevel')?.value || 'info';
+    let targetEmployee = null;
+    if(target !== 'all'){
+      const doc = await db.collection('employees').doc(target).get();
+      if(!doc.exists) throw new Error('ไม่พบพนักงานปลายทาง');
+      targetEmployee = {id:doc.id,...doc.data()};
+    }
+    await createNotificationV27({target, targetEmployee, title, message, level, meta:{manual:true}});
+    if($('noticeTitle')) $('noticeTitle').value='';
+    if($('noticeMessage')) $('noticeMessage').value='';
+    toast('ส่งแจ้งเตือนแล้ว');
+    await loadAdminNotificationsV27();
+  }catch(e){toast('ส่งแจ้งเตือนไม่สำเร็จ: '+e.message,6000)}
+}
+function clearNoticeFormV27(){ if($('noticeTitle')) $('noticeTitle').value=''; if($('noticeMessage')) $('noticeMessage').value=''; if($('noticeLevel')) $('noticeLevel').value='info'; if($('noticeTarget')) $('noticeTarget').value='all'; }
+async function loadAdminNotificationsV27(){
+  if(!$('adminNotificationsList')) return;
+  try{
+    const snap = await db.collection('notifications').get();
+    const rows = snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    $('adminNotificationsList').innerHTML = rows.map(r=>renderNotificationV27(r,'admin')).join('') || '<p class="muted">ยังไม่มีประวัติแจ้งเตือน</p>';
+  }catch(e){ $('adminNotificationsList').innerHTML = `<p class="muted">โหลดประวัติแจ้งเตือนไม่สำเร็จ: ${safeText(e.message)}</p>`; }
+}
+window.deleteNotificationAdminV27 = async function(id){
+  if(!confirm('ลบแจ้งเตือนนี้ออกจากระบบ?')) return;
+  await db.collection('notifications').doc(id).delete();
+  await loadAdminNotificationsV27();
+};
+
+const _showEmployeeBeforeV27 = showEmployee;
+showEmployee = async function(){
+  await _showEmployeeBeforeV27();
+  await loadMyNotifications();
+};
+const _showAdminBeforeV27 = showAdmin;
+showAdmin = async function(){
+  await _showAdminBeforeV27();
+  await fillNotificationTargetsV27();
+  await loadAdminNotificationsV27();
+};
+
+/* geofence clock override */
+const _clockBeforeV27 = clock;
+clock = async function(type){
+  const btn = type === 'IN' ? $('clockInBtn') : $('clockOutBtn');
+  setBusy(btn,true,'กำลังบันทึก...');
+  try{
+    if(!currentEmployee) throw new Error('กรุณาเข้าสู่ระบบใหม่');
+    if(!capturedDataUrl) throw new Error('ต้องถ่ายรูปหน้าตัวเองก่อนลงเวลา');
+    if(!currentPosition) await getGPS();
+    let dist=null, inGeo=null;
+    if(companySettings.officeLat && companySettings.officeLng){
+      dist = distanceMeters(currentPosition.lat,currentPosition.lng,Number(companySettings.officeLat),Number(companySettings.officeLng));
+      inGeo = dist <= Number(companySettings.radiusMeters||100);
+    }
+    const mode = companySettings.geofenceMode || 'warn';
+    if(inGeo === false && mode === 'block'){
+      throw new Error(`คุณอยู่นอกพื้นที่ ${Math.round(dist||0)} เมตร ไม่สามารถลงเวลาได้`);
+    }
+    const now = new Date();
+    const data={
+      employeeId:currentEmployee.id, employeeCode:currentEmployee.employeeCode, fullName:currentEmployee.fullName,
+      type, source:'EMPLOYEE', dateKey:todayKey(), createdAt:firebase.firestore.FieldValue.serverTimestamp(), clientTime:now.toISOString(), clientTimeText:fmtDateTime(now),
+      photoPath:'firestore-base64', photoURL:capturedDataUrl, photoMode:'base64',
+      latitude:currentPosition.lat, longitude:currentPosition.lng, accuracy:currentPosition.accuracy, mapUrl:`https://maps.google.com/?q=${currentPosition.lat},${currentPosition.lng}`,
+      distanceMeters:dist, inGeofence:inGeo, geofenceMode:mode, userAgent:navigator.userAgent, appVersion:APP_VERSION_V27
+    };
+    await Promise.race([db.collection('attendance').add(data), new Promise((_,rej)=>setTimeout(()=>rej(new Error('บันทึกช้าเกินไป กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่')),20000))]);
+    if(inGeo === false && mode === 'warn'){
+      await createNotificationV27({
+        target: currentEmployee.id,
+        targetEmployee: currentEmployee,
+        title:'ลงเวลานอกพื้นที่',
+        message:`ระบบบันทึกว่าคุณลงเวลานอกพื้นที่ ประมาณ ${Math.round(dist||0)} เมตร โปรดติดต่อผู้ดูแลหากเป็นงานนอกสถานที่`,
+        level:'warning',
+        meta:{type:'OUT_OF_GEOFENCE',distanceMeters:dist}
+      }).catch(console.warn);
+    }
+    await logAudit(type==='IN'?'CLOCK_IN_V27':'CLOCK_OUT_V27',{employeeCode:currentEmployee.employeeCode,inGeofence:inGeo,distanceMeters:dist,geofenceMode:mode});
+    capturedDataUrl=null; currentPosition=null;
+    if($('preview')){$('preview').removeAttribute('src'); $('preview').classList.add('hidden')}
+    if($('gpsStatus')) $('gpsStatus').textContent='';
+    toast(inGeo===false?'บันทึกสำเร็จ แต่พบว่านอกพื้นที่':'บันทึกสำเร็จ');
+    await refreshMyStatus(); await loadMyHistory(); await loadMyNotifications();
+  }catch(e){console.error(e); toast('บันทึกไม่สำเร็จ: '+e.message,7000)}
+  finally{setBusy(btn,false)}
+};
+
+/* Better dashboard summary */
+const _loadTodayAdminBeforeV27 = loadTodayAdmin;
+loadTodayAdmin = async function(){
+  const box=$('todayList'), stat=$('todaySummary');
+  if(box) box.innerHTML='<p class="muted">กำลังโหลดสรุปวันนี้...</p>';
+  try{
+    const [summaries, otSnap, leaveSnap] = await Promise.all([
+      computeSummariesV26(todayKey(),todayKey()),
+      db.collection('otRequests').get(),
+      db.collection('leaveRequests').get()
+    ]);
+    const present=summaries.filter(s=>['PRESENT','LATE'].includes(s.status)).length;
+    const late=summaries.filter(s=>s.status==='LATE').length;
+    const absent=summaries.filter(s=>s.status==='ABSENT').length;
+    const incomplete=summaries.filter(s=>s.status==='INCOMPLETE').length;
+    const leave=summaries.filter(s=>String(s.status).startsWith('LEAVE')).length;
+    const outGeo=summaries.filter(s=>s.firstIn?.inGeofence===false || s.lastOut?.inGeofence===false).length;
+    const pendingOt=otSnap.docs.map(d=>d.data()).filter(o=>o.status==='pending').length;
+    const pendingLeave=leaveSnap.docs.map(d=>d.data()).filter(l=>l.status==='pending').length;
+    stat.innerHTML=`<div class="stat"><b>${summaries.length}</b><span>พนักงาน</span></div><div class="stat"><b>${present}</b><span>มาทำงาน</span></div><div class="stat"><b>${late}</b><span>มาสาย</span></div><div class="stat"><b>${absent}</b><span>ขาดงาน</span></div><div class="stat"><b>${incomplete}</b><span>ข้อมูลไม่ครบ</span></div><div class="stat"><b>${leave}</b><span>ลา</span></div><div class="stat"><b>${outGeo}</b><span>นอกพื้นที่</span></div><div class="stat strong"><b>${pendingOt+pendingLeave}</b><span>รออนุมัติ</span></div>`;
+    box.innerHTML=summaries.map(s=>{
+      const html=summaryToDailyItemV26(s);
+      const alerts=`<div class="daily-status-line">${renderSummaryBadgeV26(s.status)}<span class="badge ${s.firstIn?.inGeofence===false||s.lastOut?.inGeofence===false?'outgeo':''}">${s.firstIn?.inGeofence===false||s.lastOut?.inGeofence===false?'นอกพื้นที่':'พื้นที่ปกติ'}</span>${s.lateMinutes?`<span class="badge late">สาย ${s.lateMinutes} นาที</span>`:''}</div>`;
+      return html.replace('</div></div>', alerts+'</div></div>');
+    }).join('') || '<p class="muted">วันนี้ยังไม่มีข้อมูล</p>';
+  }catch(e){
+    console.error(e);
+    stat.innerHTML='';
+    box.innerHTML=`<p class="muted">โหลดภาพรวมวันนี้ไม่สำเร็จ: ${safeText(e.message)}</p>`;
+  }
+};
+
+function rebindV27(){
+  if($('saveSettingsBtn')) $('saveSettingsBtn').onclick=saveSettings;
+  if($('refreshTodayBtn')) $('refreshTodayBtn').onclick=loadTodayAdmin;
+  if($('loadAttendanceBtn')) $('loadAttendanceBtn').onclick=loadAttendance;
+  if($('clockInBtn')) $('clockInBtn').onclick=()=>clock('IN');
+  if($('clockOutBtn')) $('clockOutBtn').onclick=()=>clock('OUT');
+  if($('autoClockBtn')) $('autoClockBtn').onclick=autoClock;
+  if($('refreshMyNotificationsBtn')) $('refreshMyNotificationsBtn').onclick=loadMyNotifications;
+  if($('sendNoticeBtn')) $('sendNoticeBtn').onclick=sendNoticeV27;
+  if($('clearNoticeFormBtn')) $('clearNoticeFormBtn').onclick=clearNoticeFormV27;
+  if($('loadAdminNotificationsBtn')) $('loadAdminNotificationsBtn').onclick=loadAdminNotificationsV27;
+  if($('noticeTarget')) fillNotificationTargetsV27().catch(console.warn);
+  if($('setGeoMode')) $('setGeoMode').value = companySettings.geofenceMode || 'warn';
+}
+setTimeout(rebindV27,120);

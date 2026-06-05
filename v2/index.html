@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Attendance Online v2.6</title>
+  <title>Attendance Online v2.7</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
@@ -17,7 +17,7 @@
   <header class="app-header">
     <div>
       <h1 id="companyName">ระบบลงเวลาออนไลน์</h1>
-      <p class="subtitle">Selfie • GPS • Payroll • Leave • Work Calendar • Auto Absent/Late</p>
+      <p class="subtitle">Selfie • GPS • Payroll • Leave • Calendar • Daily Summary • Notifications</p>
     </div>
     <button id="installBtn" class="secondary hidden">ติดตั้งแอป</button>
   </header>
@@ -87,8 +87,9 @@
       </div>
 
       <div class="card">
-        <div class="section-title"><h3>ประวัติของฉัน</h3><button id="refreshMyHistoryBtn" class="secondary">รีเฟรช</button></div>
-        <div id="myHistory" class="list"></div>
+        <div class="section-title"><h3>แจ้งเตือนของฉัน</h3><button id="refreshMyNotificationsBtn" class="secondary">รีเฟรช</button></div>
+        <p class="muted small">ข้อความจากผู้ดูแลระบบ สถานะใบลา OT และรายการผิดปกติ</p>
+        <div id="myNotifications" class="list"></div>
       </div>
 
       <div class="grid two">
@@ -122,6 +123,7 @@
         <button data-tab="benefits">สวัสดิการ</button>
         <button data-tab="payroll">Payroll</button>
         <button data-tab="settings">ตั้งค่า</button>
+        <button data-tab="notifications">แจ้งเตือน</button>
         <button data-tab="logs">Logs</button>
       </nav>
 
@@ -243,6 +245,7 @@
           <label>รัศมีอนุญาต (เมตร)</label><input id="setRadius" type="number" />
           <label>Latitude</label><input id="setLat" />
           <label>Longitude</label><input id="setLng" />
+          <label>โหมดพื้นที่ลงเวลา</label><select id="setGeoMode"><option value="allow">อนุญาตทุกที่</option><option value="warn">เตือนเมื่ออยู่นอกพื้นที่</option><option value="block">บังคับอยู่ในพื้นที่เท่านั้น</option></select>
           <label>วันเงินออกรายเดือน</label><input id="setMonthlyPayDay" type="number" min="1" max="31" placeholder="เช่น 30" />
           <label>วันเริ่มงวดราย 14 วัน</label><input id="setBiweeklyStart" type="date" />
         </div>
@@ -253,6 +256,24 @@
           <button id="clearAttendanceBtn" class="danger">ลบข้อมูลเวลาเข้าออก</button>
           <button id="clearAuditBtn" class="danger">เคลียร์ Log</button>
         </div>
+      </div>
+
+      <div id="tabNotifications" class="tab card hidden">
+        <div class="section-title"><h3>แจ้งเตือนพนักงาน</h3><button id="loadAdminNotificationsBtn" class="secondary">โหลดประวัติ</button></div>
+        <p class="muted small">ส่งข้อความไปยังพนักงาน 1 คน หรือทุกคน ข้อความจะไปแสดงในหน้า User และลบได้</p>
+        <div class="form-grid big">
+          <label>ส่งถึง</label><select id="noticeTarget"><option value="all">ทุกคน</option></select>
+          <label>หัวข้อ</label><input id="noticeTitle" placeholder="เช่น แจ้งวันหยุด / เตือนลงเวลา" />
+          <label>ข้อความ</label><textarea id="noticeMessage" rows="4" placeholder="พิมพ์ข้อความแจ้งเตือน"></textarea>
+          <label>ระดับ</label><select id="noticeLevel"><option value="info">ทั่วไป</option><option value="warning">เตือน</option><option value="success">สำเร็จ</option><option value="danger">สำคัญ</option></select>
+        </div>
+        <div class="actions wrap">
+          <button id="sendNoticeBtn" class="primary">ส่งแจ้งเตือน</button>
+          <button id="clearNoticeFormBtn" class="secondary">ล้างฟอร์ม</button>
+        </div>
+        <hr>
+        <h4>ประวัติแจ้งเตือน</h4>
+        <div id="adminNotificationsList" class="list"></div>
       </div>
 
       <div id="tabLogs" class="tab card hidden">

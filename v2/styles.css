@@ -39,3 +39,22 @@ details{margin-top:8px} details summary{cursor:pointer;color:#93c5fd}
 .cal-event.ot-open{background:rgba(245,158,11,.24);color:#fde68a}
 .badge.warning{background:rgba(245,158,11,.18);color:#fde68a;border-color:rgba(245,158,11,.35)}
 .mini-row{padding:8px 10px;border-bottom:1px solid rgba(148,163,184,.14)}
+
+
+/* v2.7 notification + geofence + summary */
+.notice-card{border-left:5px solid #38bdf8}
+.notice-card.warning{border-left-color:#f59e0b}
+.notice-card.success{border-left-color:#22c55e}
+.notice-card.danger{border-left-color:#ef4444}
+.notice-title{font-weight:800;font-size:1.02rem}
+.notice-message{white-space:pre-wrap;margin:.35rem 0}
+.summary-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.badge.absent{background:#7f1d1d;color:#fecaca}
+.badge.late{background:#78350f;color:#fde68a}
+.badge.incomplete{background:#3f3f46;color:#e4e4e7}
+.badge.leave{background:#1e3a8a;color:#bfdbfe}
+.badge.holiday{background:#064e3b;color:#bbf7d0}
+.badge.outgeo{background:#581c87;color:#e9d5ff}
+textarea{width:100%;border:1px solid rgba(148,163,184,.35);border-radius:14px;padding:12px;background:#0f172a;color:#e5e7eb;font:inherit;resize:vertical}
+.daily-status-line{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.stat.strong{border-color:rgba(34,197,94,.65);background:rgba(34,197,94,.08)}
