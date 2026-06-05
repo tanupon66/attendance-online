@@ -1278,7 +1278,7 @@ setTimeout(rebindV26,50);
    - Manual notifications to user/all
    - User notification history + delete
    ========================= */
-const APP_VERSION_V27 = '2.7.1';
+const APP_VERSION_V27 = '2.8.0';
 companySettings.geofenceMode = companySettings.geofenceMode || 'warn';
 
 function geoModeTextV27(mode){
@@ -1558,3 +1558,269 @@ function rebindV27(){
   if($('setGeoMode')) $('setGeoMode').value = companySettings.geofenceMode || 'warn';
 }
 setTimeout(rebindV27,120);
+
+
+/* =========================
+   v2.8.0 notification cleanup
+   - เหลือกล่องแจ้งเตือนฝั่ง user เพียงกล่องเดียว
+   - แจ้งเตือนจะไม่โหลดอัตโนมัติ ต้องกดรีเฟรชเอง
+   - หลังลงเวลา/เข้าแอป จะไม่ดึงแจ้งเตือนขึ้นเอง
+   ========================= */
+const APP_VERSION_V28 = '2.8.0';
+
+function removeLegacyNotificationCardV28(){
+  const oldList = $('notificationList');
+  if(oldList){
+    const oldCard = oldList.closest('.card');
+    const oldGrid = oldCard?.parentElement;
+    if(oldCard) oldCard.remove();
+    if(oldGrid && oldGrid.classList.contains('grid') && !oldGrid.querySelector('.card')) oldGrid.remove();
+  }
+  const title = $('myNotifications')?.closest('.card')?.querySelector('h3');
+  if(title) title.textContent = 'แจ้งเตือน';
+}
+
+function setNotificationPlaceholderV28(){
+  if($('myNotifications')){
+    $('myNotifications').innerHTML = '<p class="muted">กดรีเฟรชเพื่อโหลดแจ้งเตือนล่าสุด</p>';
+  }
+}
+
+// ปิดระบบแจ้งเตือนเก่าที่ v2.4 เคยสร้างไว้ เพื่อไม่ให้มี 2 กล่อง
+loadNotificationsV24 = async function(){
+  removeLegacyNotificationCardV28();
+};
+window.markNotificationReadV24 = async function(){
+  removeLegacyNotificationCardV28();
+};
+
+// ให้ปุ่มรีเฟรชเท่านั้นที่โหลดข้อมูลจริง
+const loadMyNotificationsV28 = loadMyNotifications;
+loadMyNotifications = async function(){
+  removeLegacyNotificationCardV28();
+  return loadMyNotificationsV28();
+};
+
+// Override showEmployee: ไม่โหลด notification อัตโนมัติแล้ว
+showEmployee = async function(){
+  showPanel('employeePanel');
+  if($('empName')) $('empName').textContent = currentEmployee.fullName;
+  if($('empDetail')) $('empDetail').textContent = `${currentEmployee.employeeCode} • ${currentEmployee.department||'-'} • ${currentEmployee.position||'-'}`;
+  setUserDefaultDates();
+  enhanceLeaveUiV24();
+  removeLegacyNotificationCardV28();
+  await refreshMyStatus();
+  await loadMyHistory();
+  await loadLeaveBalanceV24();
+  if(typeof loadUserCalendarV22 === 'function') await loadUserCalendarV22().catch(console.warn);
+  if(typeof loadUserSlipV22 === 'function') await loadUserSlipV22().catch(console.warn);
+  setNotificationPlaceholderV28();
+};
+
+// Override clock: บันทึกเหมือน v2.7 แต่ไม่ดึงแจ้งเตือนขึ้นมาอัตโนมัติ
+clock = async function(type){
+  const btn = type==='IN' ? $('clockInBtn') : $('clockOutBtn');
+  setBusy(btn,true,'กำลังบันทึก...');
+  try{
+    if(!currentEmployee) throw new Error('กรุณาเข้าสู่ระบบใหม่');
+    if(!capturedDataUrl) throw new Error('ต้องถ่ายรูปหน้าตัวเองก่อนลงเวลา');
+    if(!currentPosition) await getGPS();
+    let dist=null, inGeo=null;
+    if(companySettings.officeLat && companySettings.officeLng){
+      dist=distanceMeters(currentPosition.lat,currentPosition.lng,Number(companySettings.officeLat),Number(companySettings.officeLng));
+      inGeo=dist <= Number(companySettings.radiusMeters||100);
+    }
+    const mode = companySettings.geofenceMode || 'warn';
+    if(inGeo === false && mode === 'block'){
+      throw new Error(`คุณอยู่นอกพื้นที่ ${Math.round(dist||0)} เมตร ไม่สามารถลงเวลาได้`);
+    }
+    const now = new Date();
+    const data={
+      employeeId:currentEmployee.id, employeeCode:currentEmployee.employeeCode, fullName:currentEmployee.fullName,
+      type, source:'EMPLOYEE', dateKey:todayKey(), createdAt:firebase.firestore.FieldValue.serverTimestamp(), clientTime:now.toISOString(), clientTimeText:fmtDateTime(now),
+      photoPath:'firestore-base64', photoURL:capturedDataUrl, photoMode:'base64',
+      latitude:currentPosition.lat, longitude:currentPosition.lng, accuracy:currentPosition.accuracy, mapUrl:`https://maps.google.com/?q=${currentPosition.lat},${currentPosition.lng}`,
+      distanceMeters:dist, inGeofence:inGeo, geofenceMode:mode, userAgent:navigator.userAgent, appVersion:APP_VERSION_V28
+    };
+    await Promise.race([
+      db.collection('attendance').add(data),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('บันทึกช้าเกินไป กรุณาเช็กอินเทอร์เน็ตแล้วลองใหม่')),20000))
+    ]);
+    if(inGeo === false && mode === 'warn'){
+      await createNotificationV27({
+        target: currentEmployee.id,
+        targetEmployee: currentEmployee,
+        title:'ลงเวลานอกพื้นที่',
+        message:`ระบบบันทึกว่าคุณลงเวลานอกพื้นที่ ประมาณ ${Math.round(dist||0)} เมตร โปรดติดต่อผู้ดูแลหากเป็นงานนอกสถานที่`,
+        level:'warning',
+        meta:{type:'OUT_OF_GEOFENCE',distanceMeters:dist,appVersion:APP_VERSION_V28}
+      }).catch(console.warn);
+    }
+    await logAudit(type==='IN'?'CLOCK_IN_V28':'CLOCK_OUT_V28',{employeeCode:currentEmployee.employeeCode,inGeofence:inGeo,distanceMeters:dist,geofenceMode:mode});
+    capturedDataUrl=null; currentPosition=null;
+    if($('preview')){$('preview').removeAttribute('src'); $('preview').classList.add('hidden')}
+    if($('gpsStatus')) $('gpsStatus').textContent='';
+    toast(inGeo===false?'บันทึกสำเร็จ แต่พบว่านอกพื้นที่':'บันทึกสำเร็จ');
+    await refreshMyStatus();
+    await loadMyHistory();
+    setNotificationPlaceholderV28();
+  }catch(e){
+    console.error(e);
+    toast('บันทึกไม่สำเร็จ: '+e.message,7000);
+  }finally{
+    setBusy(btn,false);
+  }
+};
+
+function rebindV28(){
+  removeLegacyNotificationCardV28();
+  if($('refreshMyNotificationsBtn')) $('refreshMyNotificationsBtn').onclick = loadMyNotifications;
+  if($('clockInBtn')) $('clockInBtn').onclick = ()=>clock('IN');
+  if($('clockOutBtn')) $('clockOutBtn').onclick = ()=>clock('OUT');
+  if($('autoClockBtn')) $('autoClockBtn').onclick = autoClock;
+  if($('myNotifications') && currentEmployee?.role !== 'admin') setNotificationPlaceholderV28();
+}
+setTimeout(rebindV28,250);
+
+
+/* =========================
+   v2.9.0 auto-load + notification top/popup
+   - ไม่ต้องกดรีเฟรช แจ้งเตือน/ข้อมูลหลักโหลดเองหลัง login
+   - ย้ายกล่องแจ้งเตือนขึ้นด้านบน
+   - แจ้งเตือนใหม่แสดงเป็น popup/bannner ด้านบน
+   ========================= */
+const APP_VERSION_V29 = '2.9.0';
+
+function ensureUserNotificationsTopV29(){
+  const list = $('myNotifications');
+  const panel = $('employeePanel');
+  if(!list || !panel) return;
+  const card = list.closest('.card');
+  const topbar = panel.querySelector('.topbar-card');
+  if(card && topbar && topbar.nextSibling !== card){
+    card.classList.add('notification-card-top');
+    topbar.insertAdjacentElement('afterend', card);
+  }
+  const title = card?.querySelector('h3');
+  if(title) title.textContent = 'แจ้งเตือน';
+  const btn = $('refreshMyNotificationsBtn');
+  if(btn) btn.remove();
+  if(!$('myNotificationCount')){
+    const h = card?.querySelector('.section-title');
+    if(h){
+      const span = document.createElement('span');
+      span.id = 'myNotificationCount';
+      span.className = 'badge';
+      span.textContent = 'โหลดอัตโนมัติ';
+      h.appendChild(span);
+    }
+  }
+}
+
+function ensureNotificationPopupV29(){
+  if($('notificationPopupV29')) return;
+  const box=document.createElement('div');
+  box.id='notificationPopupV29';
+  box.className='notification-popup hidden';
+  box.innerHTML=`
+    <div>
+      <b id="notificationPopupTitle">แจ้งเตือนใหม่</b>
+      <p id="notificationPopupText" class="muted small"></p>
+    </div>
+    <div class="actions compact">
+      <button id="notificationPopupView" class="primary">ดู</button>
+      <button id="notificationPopupClose" class="ghost">ปิด</button>
+    </div>`;
+  document.body.appendChild(box);
+  $('notificationPopupClose').onclick=()=>box.classList.add('hidden');
+  $('notificationPopupView').onclick=()=>{
+    box.classList.add('hidden');
+    ensureUserNotificationsTopV29();
+    $('myNotifications')?.closest('.card')?.scrollIntoView({behavior:'smooth',block:'start'});
+  };
+}
+
+async function getVisibleNotificationsV29(){
+  if(!currentEmployee || !db) return [];
+  const snap = await db.collection('notifications').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .filter(canSeeNotificationV27)
+    .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+}
+
+function renderNotificationPopupV29(rows){
+  ensureNotificationPopupV29();
+  const unread = rows.filter(n=>!n.read && !(n.readBy||[]).includes(currentEmployee?.id));
+  const countEl = $('myNotificationCount');
+  if(countEl){
+    countEl.textContent = unread.length ? `${unread.length} ใหม่` : `${rows.length} รายการ`;
+    countEl.className = unread.length ? 'badge bad' : 'badge good';
+  }
+  if(!unread.length) return;
+  const latest = unread[0];
+  $('notificationPopupTitle').textContent = unread.length === 1 ? (latest.title || 'แจ้งเตือนใหม่') : `มีแจ้งเตือนใหม่ ${unread.length} รายการ`;
+  $('notificationPopupText').textContent = unread.length === 1 ? (latest.message || '') : `${latest.title || 'แจ้งเตือน'}: ${latest.message || ''}`;
+  $('notificationPopupV29').classList.remove('hidden');
+}
+
+const _loadMyNotificationsBeforeV29 = loadMyNotifications;
+loadMyNotifications = async function(options={popup:true}){
+  ensureUserNotificationsTopV29();
+  await _loadMyNotificationsBeforeV29();
+  try{
+    const rows = await getVisibleNotificationsV29();
+    renderNotificationPopupV29(rows);
+  }catch(e){console.warn('v2.9 notification popup failed', e)}
+};
+
+// showEmployee ใหม่: โหลดข้อมูลสำคัญทั้งหมดเองหลัง login ไม่ต้องกด refresh
+const _showEmployeeBeforeV29 = showEmployee;
+showEmployee = async function(){
+  await _showEmployeeBeforeV29();
+  ensureUserNotificationsTopV29();
+  const jobs=[];
+  if(typeof refreshMyStatus==='function') jobs.push(refreshMyStatus().catch(console.warn));
+  if(typeof loadMyHistory==='function') jobs.push(loadMyHistory().catch(console.warn));
+  if(typeof loadLeaveBalanceV24==='function') jobs.push(loadLeaveBalanceV24().catch(console.warn));
+  if(typeof loadUserCalendarV22==='function') jobs.push(loadUserCalendarV22().catch(console.warn));
+  if(typeof loadUserSlipV22==='function') jobs.push(loadUserSlipV22().catch(console.warn));
+  if(typeof loadMyNotifications==='function') jobs.push(loadMyNotifications({popup:true}).catch(console.warn));
+  await Promise.allSettled(jobs);
+};
+
+// showAdmin ใหม่: โหลดข้อมูลหลักและแจ้งเตือน admin เอง ไม่ต้องกด refresh/load
+const _showAdminBeforeV29 = showAdmin;
+showAdmin = async function(){
+  await _showAdminBeforeV29();
+  const jobs=[];
+  if(typeof loadTodayAdmin==='function') jobs.push(loadTodayAdmin().catch(console.warn));
+  if(typeof loadEmployees==='function') jobs.push(loadEmployees().catch(console.warn));
+  if(typeof loadAdminNotificationsV27==='function') jobs.push(loadAdminNotificationsV27().catch(console.warn));
+  if(typeof fillNotificationTargetsV27==='function') jobs.push(fillNotificationTargetsV27().catch(console.warn));
+  await Promise.allSettled(jobs);
+};
+
+// หลังลงเวลา ให้โหลดประวัติ/สถานะ/แจ้งเตือนใหม่ให้อัตโนมัติ
+const _clockBeforeV29 = clock;
+clock = async function(type){
+  await _clockBeforeV29(type);
+  if(currentEmployee && currentEmployee.role !== 'admin'){
+    await Promise.allSettled([
+      refreshMyStatus?.(),
+      loadMyHistory?.(),
+      loadMyNotifications?.({popup:true})
+    ]);
+  }
+};
+
+function rebindV29(){
+  ensureUserNotificationsTopV29();
+  ensureNotificationPopupV29();
+  // ปุ่ม refresh ถ้ายังหลงเหลือให้ใช้ได้ แต่ไม่จำเป็นอีกต่อไป
+  if($('refreshMyNotificationsBtn')) $('refreshMyNotificationsBtn').onclick = ()=>loadMyNotifications({popup:true});
+  if($('clockInBtn')) $('clockInBtn').onclick=()=>clock('IN');
+  if($('clockOutBtn')) $('clockOutBtn').onclick=()=>clock('OUT');
+  if($('autoClockBtn')) $('autoClockBtn').onclick=autoClock;
+}
+setTimeout(rebindV29,450);

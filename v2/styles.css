@@ -58,3 +58,42 @@ details{margin-top:8px} details summary{cursor:pointer;color:#93c5fd}
 textarea{width:100%;border:1px solid rgba(148,163,184,.35);border-radius:14px;padding:12px;background:#0f172a;color:#e5e7eb;font:inherit;resize:vertical}
 .daily-status-line{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
 .stat.strong{border-color:rgba(34,197,94,.65);background:rgba(34,197,94,.08)}
+
+
+/* v2.9 notification UX */
+.notification-card-top{
+  position: relative;
+  border-color: rgba(96,165,250,.55) !important;
+  box-shadow: 0 14px 48px rgba(37,99,235,.16);
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+.notification-card-top .section-title{
+  align-items:center;
+}
+.notification-popup{
+  position: fixed;
+  z-index: 10000;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(94vw, 720px);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(15, 23, 42, .96);
+  border: 1px solid rgba(96,165,250,.55);
+  box-shadow: 0 20px 70px rgba(0,0,0,.45);
+  backdrop-filter: blur(10px);
+}
+.notification-popup.hidden{display:none;}
+.notification-popup p{margin:.25rem 0 0;}
+.actions.compact{display:flex; gap:8px; align-items:center; flex-wrap:nowrap;}
+.actions.compact button{padding:8px 12px; min-width:auto;}
+@media(max-width:640px){
+  .notification-popup{align-items:flex-start; flex-direction:column;}
+  .actions.compact{width:100%; justify-content:flex-end;}
+}

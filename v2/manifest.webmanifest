@@ -1,1 +1,1 @@
-{"name":"Attendance Online v2","short_name":"Attendance","start_url":"./","display":"standalone","background_color":"#0f172a","theme_color":"#0f172a","icons":[{"src":"assets/icon.svg","sizes":"any","type":"image/svg+xml"}]}
+{"name":"Attendance Online v2.8","short_name":"Attendance","start_url":"./?v=28","display":"standalone","background_color":"#0f172a","theme_color":"#0f172a","icons":[{"src":"assets/icon.svg","sizes":"any","type":"image/svg+xml"}]}
