@@ -545,3 +545,403 @@ function rebindPayrollV23(){
   if($('setCurrentPayPeriodBtn')) $('setCurrentPayPeriodBtn').onclick = setCurrentPayPeriod;
 }
 rebindPayrollV23();
+
+/* =========================
+   v2.4 Leave Entitlement + Leave Approval + Payroll Leave Integration
+   - โควต้าลารายคนต่อปีเป็นชั่วโมง
+   - ลากิจ/ลาป่วย/พักร้อน/ลาไม่จ่าย/ขาดงาน
+   - ลาครึ่งวัน/รายชั่วโมง/เต็มวัน
+   - แจ้งเตือน user เมื่ออนุมัติ/ไม่อนุมัติ
+   - payroll รวมวันลาจ่ายเงิน และหักลาไม่จ่าย/ขาดงานสำหรับรายเดือน
+   - query แบบไม่ต้องสร้าง composite index เพิ่ม
+   ========================= */
+
+const LEAVE_TYPES_V24 = {
+  personal: 'ลากิจ',
+  sick: 'ลาป่วย',
+  vacation: 'ลาพักร้อน',
+  unpaid: 'ลาไม่จ่ายเงิน',
+  absent: 'ขาดงาน'
+};
+const LEAVE_QUOTA_TYPES_V24 = ['personal','sick','vacation'];
+const LEAVE_DEFAULT_HOURS_PER_DAY_V24 = 8;
+
+function leaveTextV24(type){ return LEAVE_TYPES_V24[type] || type || '-'; }
+function leaveUnitTextV24(unit){ return unit==='hourly'?'รายชั่วโมง':unit==='halfDay'?'ครึ่งวัน':'เต็มวัน'; }
+function leavePayTextV24(payMode){ return payMode==='unpaid'?'ไม่จ่ายเงิน':payMode==='absence'?'ขาดงาน':'จ่ายเงิน'; }
+function yearOfDateV24(dateKey){ return String(dateKey || todayKey()).slice(0,4); }
+function numV24(v, fallback=0){ const n=Number(v); return Number.isFinite(n)?n:fallback; }
+function dateDiffDaysInclusiveV24(start,end){
+  const a=new Date(start+'T00:00:00'), b=new Date(end+'T00:00:00');
+  if(!start||!end||isNaN(a)||isNaN(b)) return 0;
+  return Math.max(1, Math.round((b-a)/86400000)+1);
+}
+function calcLeaveHoursV24(start,end,unit,hours){
+  if(unit==='hourly') return Math.max(0, numV24(hours,0));
+  const days=dateDiffDaysInclusiveV24(start,end);
+  if(unit==='halfDay') return days*4;
+  return days*LEAVE_DEFAULT_HOURS_PER_DAY_V24;
+}
+function leaveQuotaOfV24(emp,type){
+  return numV24(emp?.leaveQuotas?.[type] ?? emp?.[`leave${type[0].toUpperCase()+type.slice(1)}Hours`] ?? 0,0);
+}
+
+function enhanceLeaveUiV24(){
+  // Employee form: add per-employee yearly leave entitlement
+  if($('empShiftId') && !$('empLeaveSick')){
+    const grid=$('empShiftId').closest('.form-grid');
+    if(grid){
+      const insert=document.createElement('div');
+      insert.style.display='contents';
+      insert.innerHTML=`
+        <label>ลาป่วย/ปี (ชม.)</label><input id="empLeaveSick" type="number" step="0.25" min="0" value="0" />
+        <label>ลากิจ/ปี (ชม.)</label><input id="empLeavePersonal" type="number" step="0.25" min="0" value="0" />
+        <label>พักร้อน/ปี (ชม.)</label><input id="empLeaveVacation" type="number" step="0.25" min="0" value="0" />
+      `;
+      const activeLabel=$('empActive')?.closest('label')?.previousElementSibling;
+      if(activeLabel) grid.insertBefore(insert, activeLabel);
+      else grid.appendChild(insert);
+    }
+  }
+
+  // Employee leave request form: detailed leave type/pay/unit/hours
+  if($('leaveType') && !$('leavePayMode')){
+    $('leaveType').innerHTML=`
+      <option value="personal">ลากิจ</option>
+      <option value="sick">ลาป่วย</option>
+      <option value="vacation">ลาพักร้อน</option>
+      <option value="unpaid">ลาไม่จ่ายเงิน</option>
+      <option value="absent">ขาดงาน</option>
+    `;
+    const form=$('leaveType').closest('.form-grid');
+    if(form){
+      const extra=document.createElement('div');
+      extra.style.display='contents';
+      extra.innerHTML=`
+        <label>สถานะเงิน</label>
+        <select id="leavePayMode"><option value="paid">ลาจ่ายเงิน</option><option value="unpaid">ลาไม่จ่ายเงิน</option><option value="absence">ขาดงาน</option></select>
+        <label>รูปแบบลา</label>
+        <select id="leaveUnit"><option value="fullDay">เต็มวัน</option><option value="halfDay">ครึ่งวัน</option><option value="hourly">รายชั่วโมง</option></select>
+        <label>จำนวนชั่วโมง<br><span class="muted small">ใส่เมื่อเลือกรายชั่วโมง</span></label>
+        <input id="leaveHours" type="number" step="0.25" min="0" placeholder="เช่น 2" />
+      `;
+      form.insertBefore(extra, $('leaveReason')?.previousElementSibling || null);
+    }
+  }
+
+  // Employee leave balance + notifications card
+  const empPanel=$('employeePanel');
+  if(empPanel && !$('leaveBalanceList')){
+    const card=document.createElement('div');
+    card.className='grid two';
+    card.innerHTML=`
+      <div class="card">
+        <div class="section-title"><h3>สิทธิ์วันลาของฉัน</h3><button id="refreshLeaveBalanceBtn" class="secondary">รีเฟรช</button></div>
+        <div id="leaveBalanceList" class="list"></div>
+      </div>
+      <div class="card">
+        <div class="section-title"><h3>แจ้งเตือน</h3><button id="refreshNotificationsBtn" class="secondary">รีเฟรช</button></div>
+        <div id="notificationList" class="list"></div>
+      </div>`;
+    const history=$('myHistory')?.closest('.card');
+    if(history) history.parentNode.insertBefore(card, history.nextSibling);
+    else empPanel.appendChild(card);
+  }
+
+  // Admin leave tab helper text
+  if($('leaveList') && !$('leavePolicyHint')){
+    const hint=document.createElement('p');
+    hint.id='leavePolicyHint';
+    hint.className='muted small';
+    hint.textContent='ระบบคิดสิทธิ์ลาเป็นชั่วโมงต่อปี รายคนไม่จำเป็นต้องเท่ากัน: ลากิจ/ลาป่วย/พักร้อนใช้โควต้า, ลาไม่จ่ายเงิน/ขาดงานไม่ใช้โควต้าแต่ส่งผลต่อ Payroll';
+    $('leaveList').parentNode.insertBefore(hint,$('leaveList'));
+  }
+}
+
+enhanceLeaveUiV24();
+
+// Override employee form functions to include leave quotas
+const clearEmployeeFormBaseV24 = window.clearEmployeeForm || clearEmployeeForm;
+clearEmployeeForm = function(){
+  clearEmployeeFormBaseV24();
+  if($('empLeaveSick')) $('empLeaveSick').value='0';
+  if($('empLeavePersonal')) $('empLeavePersonal').value='0';
+  if($('empLeaveVacation')) $('empLeaveVacation').value='0';
+};
+
+window.editEmployee = async function(id){
+  const d=await db.collection('employees').doc(id).get();
+  const e={id:d.id,...d.data()};
+  $('empIdEdit').value=e.id;
+  $('empCode').value=e.employeeCode||'';
+  $('empFullName').value=e.fullName||'';
+  $('empDept').value=e.department||'';
+  $('empPosition').value=e.position||'';
+  $('empRole').value=e.role||'employee';
+  $('empPayType').value=e.payType||'hourly';
+  $('empPayCycle').value=e.payCycle||'monthly';
+  $('empHourly').value=e.hourlyRate||0;
+  $('empDaily').value=e.dailyRate||0;
+  $('empMonthly').value=e.monthlySalary||0;
+  $('empOt').value=e.otMultiplier||1.5;
+  if(e.shiftId && $('empShiftId')) $('empShiftId').value=e.shiftId;
+  $('empActive').checked=e.active!==false;
+  $('empPin').value='';
+  if($('empLeaveSick')) $('empLeaveSick').value=leaveQuotaOfV24(e,'sick');
+  if($('empLeavePersonal')) $('empLeavePersonal').value=leaveQuotaOfV24(e,'personal');
+  if($('empLeaveVacation')) $('empLeaveVacation').value=leaveQuotaOfV24(e,'vacation');
+  toast('โหลดข้อมูลเข้าฟอร์มแล้ว');
+};
+
+saveEmployee = async function(){
+  const id=$('empIdEdit').value;
+  const code=$('empCode').value.trim();
+  const name=$('empFullName').value.trim();
+  const pin=$('empPin').value.trim();
+  if(!code||!name) return toast('กรุณากรอกรหัสและชื่อ');
+  if(!id&&!pin) return toast('พนักงานใหม่ต้องมี PIN');
+  const data={
+    employeeCode:code,
+    fullName:name,
+    department:$('empDept').value.trim(),
+    position:$('empPosition').value.trim(),
+    role:$('empRole').value,
+    active:$('empActive').checked,
+    payType:$('empPayType').value,
+    payCycle:$('empPayCycle').value,
+    hourlyRate:numV24($('empHourly').value,0),
+    dailyRate:numV24($('empDaily').value,0),
+    monthlySalary:numV24($('empMonthly').value,0),
+    otMultiplier:numV24($('empOt').value,1.5),
+    shiftId:$('empShiftId')?.value||null,
+    leaveQuotas:{
+      sick:numV24($('empLeaveSick')?.value,0),
+      personal:numV24($('empLeavePersonal')?.value,0),
+      vacation:numV24($('empLeaveVacation')?.value,0)
+    },
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+  };
+  if(pin) data.pinHash=await sha256(pin);
+  if(id) await db.collection('employees').doc(id).update(data);
+  else await db.collection('employees').add({...data,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+  await logAudit(id?'UPDATE_EMPLOYEE':'ADD_EMPLOYEE',{code,leaveQuotas:data.leaveQuotas});
+  clearEmployeeForm();
+  loadEmployees();
+  toast('บันทึกพนักงานแล้ว');
+};
+
+loadEmployees = async function(){
+  try{
+    await getShifts(); fillShiftSelect();
+    const snap=await db.collection('employees').get();
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.employeeCode||'').localeCompare(String(b.employeeCode||'')));
+    $('employeeList').innerHTML=rows.map(e=>{
+      const q=e.leaveQuotas||{};
+      return `<div class="item"><b>${safeText(e.employeeCode)} - ${safeText(e.fullName)}</b><br>
+      <span class="muted">${safeText(e.department)} • ${safeText(e.position)} • ${e.role||'employee'} • ${payTypeText(e.payType)} • ${e.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'} • ${safeText(getShift(e.shiftId)?.name||'-')}</span><br>
+      <span class="muted small">สิทธิ์ลา/ปี: ป่วย ${numV24(q.sick,0)} ชม. • กิจ ${numV24(q.personal,0)} ชม. • พักร้อน ${numV24(q.vacation,0)} ชม.</span><br>
+      <span class="badge ${e.active!==false?'good':'bad'}">${e.active!==false?'ใช้งาน':'ปิด'}</span>
+      <div class="row-actions"><button onclick="editEmployee('${e.id}')" class="warning">แก้ไข</button><button onclick="toggleEmployee('${e.id}',${e.active!==false?'false':'true'})" class="ghost">${e.active!==false?'ปิดใช้งาน':'เปิดใช้งาน'}</button><button onclick="deleteEmployee('${e.id}','${safeText(e.employeeCode)}')" class="danger">ลบ</button></div></div>`;
+    }).join('')||'<p class="muted">ยังไม่มีพนักงาน</p>';
+  }catch(e){console.error(e); $('employeeList').innerHTML=`<p class="muted">โหลดรายชื่อพนักงานไม่สำเร็จ: ${safeText(e.message)}</p>`;}
+};
+
+async function getApprovedLeavesForEmployeeYearV24(employeeId, year){
+  const snap=await db.collection('leaveRequests').where('employeeId','==',employeeId).get();
+  return snap.docs.map(d=>({id:d.id,...d.data()})).filter(l=>l.status==='approved' && yearOfDateV24(l.startDate)===String(year));
+}
+async function computeLeaveBalanceV24(emp, year=(new Date()).getFullYear()){
+  const leaves=await getApprovedLeavesForEmployeeYearV24(emp.id,year);
+  const used={sick:0,personal:0,vacation:0,unpaid:0,absent:0};
+  leaves.forEach(l=>{used[l.type]=(used[l.type]||0)+numV24(l.hours,0)});
+  return LEAVE_QUOTA_TYPES_V24.map(type=>({type,label:leaveTextV24(type),quota:leaveQuotaOfV24(emp,type),used:used[type]||0,remain:Math.max(0,leaveQuotaOfV24(emp,type)-(used[type]||0))})).concat([
+    {type:'unpaid',label:'ลาไม่จ่ายเงิน',quota:null,used:used.unpaid||0,remain:null},
+    {type:'absent',label:'ขาดงาน',quota:null,used:used.absent||0,remain:null}
+  ]);
+}
+async function loadLeaveBalanceV24(){
+  if(!$('leaveBalanceList') || !currentEmployee) return;
+  try{
+    const rows=await computeLeaveBalanceV24(currentEmployee);
+    $('leaveBalanceList').innerHTML=rows.map(r=>`<div class="mini-row"><b>${r.label}</b> ใช้ ${r.used.toFixed(2)} ชม. ${r.quota===null?'':`/ สิทธิ์ ${r.quota.toFixed(2)} ชม. / คงเหลือ ${r.remain.toFixed(2)} ชม.`}</div>`).join('');
+  }catch(e){$('leaveBalanceList').innerHTML=`<p class="muted">โหลดสิทธิ์ลาไม่สำเร็จ: ${safeText(e.message)}</p>`;}
+}
+async function loadNotificationsV24(){
+  if(!$('notificationList') || !currentEmployee) return;
+  try{
+    const snap=await db.collection('notifications').where('employeeId','==',currentEmployee.id).get();
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)).slice(0,30);
+    $('notificationList').innerHTML=rows.map(n=>`<div class="item"><b>${safeText(n.title||'แจ้งเตือน')}</b><br><span class="muted">${safeText(n.message||'')}</span>${n.read?'<br><span class="badge">อ่านแล้ว</span>':'<br><span class="badge bad">ใหม่</span>'}<div class="row-actions"><button class="ghost" onclick="markNotificationReadV24('${n.id}')">อ่านแล้ว</button></div></div>`).join('')||'<p class="muted">ยังไม่มีแจ้งเตือน</p>';
+  }catch(e){$('notificationList').innerHTML=`<p class="muted">โหลดแจ้งเตือนไม่สำเร็จ: ${safeText(e.message)}</p>`;}
+}
+window.markNotificationReadV24=async function(id){await db.collection('notifications').doc(id).update({read:true,readAt:firebase.firestore.FieldValue.serverTimestamp()}); loadNotificationsV24();};
+
+const showEmployeeBaseV24=showEmployee;
+showEmployee=async function(){ await showEmployeeBaseV24(); enhanceLeaveUiV24(); await loadLeaveBalanceV24(); await loadNotificationsV24(); };
+
+submitLeave = async function(){
+  const btn=$('submitLeaveBtn'); setBusy(btn,true,'กำลังส่ง...');
+  try{
+    const type=$('leaveType').value;
+    const start=$('leaveStart').value;
+    const end=$('leaveEnd').value;
+    const unit=$('leaveUnit')?.value || 'fullDay';
+    let payMode=$('leavePayMode')?.value || 'paid';
+    const reason=$('leaveReason').value.trim();
+    const hours=calcLeaveHoursV24(start,end,unit,$('leaveHours')?.value);
+    if(type==='unpaid') payMode='unpaid';
+    if(type==='absent') payMode='absence';
+    if(!start||!end||!reason) throw new Error('กรุณากรอกข้อมูลวันลา');
+    if(hours<=0) throw new Error('จำนวนชั่วโมงลาต้องมากกว่า 0');
+
+    // Quota validation for paid quota leave; use only approved so pending can still be reviewed by admin.
+    if(LEAVE_QUOTA_TYPES_V24.includes(type) && payMode==='paid'){
+      const balance=await computeLeaveBalanceV24(currentEmployee);
+      const row=balance.find(x=>x.type===type);
+      if(row && hours>row.remain){
+        throw new Error(`${leaveTextV24(type)} คงเหลือ ${row.remain.toFixed(2)} ชม. แต่ขอ ${hours.toFixed(2)} ชม.`);
+      }
+    }
+    await db.collection('leaveRequests').add({
+      employeeId:currentEmployee.id,employeeCode:currentEmployee.employeeCode,fullName:currentEmployee.fullName,
+      type,payMode,unit,hours,startDate:start,endDate:end,reason,status:'pending',
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await logAudit('SUBMIT_LEAVE',{type,payMode,unit,hours,start,end});
+    toast('ส่งคำขอลาแล้ว');
+    await loadLeaveBalanceV24();
+  }catch(e){toast(e.message,6000)}finally{setBusy(btn,false)}
+};
+
+loadLeave = async function(){
+  try{
+    const snap=await db.collection('leaveRequests').get();
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    $('leaveList').innerHTML=rows.map(l=>`<div class="item"><b>${safeText(l.employeeCode)} ${safeText(l.fullName)}</b><br>
+      <span class="muted">${leaveTextV24(l.type)} • ${leavePayTextV24(l.payMode)} • ${leaveUnitTextV24(l.unit)} • ${numV24(l.hours,0).toFixed(2)} ชม. • ${safeText(l.startDate)} ถึง ${safeText(l.endDate)} • ${safeText(l.reason)}</span><br>
+      <span class="badge ${l.status==='approved'?'good':l.status==='rejected'?'bad':''}">${safeText(l.status)}</span>
+      <div class="row-actions"><button class="good" onclick="approveLeave('${l.id}',true)">อนุมัติ</button><button class="danger" onclick="approveLeave('${l.id}',false)">ไม่อนุมัติ</button></div></div>`).join('')||'<p class="muted">ไม่มีคำขอลา</p>';
+  }catch(e){$('leaveList').innerHTML=`<p class="muted">โหลดวันลาไม่สำเร็จ: ${safeText(e.message)}</p>`;}
+};
+
+window.approveLeave=async function(id,ok){
+  const ref=db.collection('leaveRequests').doc(id);
+  const d=await ref.get(); if(!d.exists) return toast('ไม่พบคำขอลา');
+  const l={id:d.id,...d.data()};
+  await ref.update({status:ok?'approved':'rejected',approvedBy:currentEmployee.employeeCode,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  await db.collection('notifications').add({
+    employeeId:l.employeeId,
+    employeeCode:l.employeeCode,
+    title: ok?'คำขอลาได้รับอนุมัติ':'คำขอลาไม่ผ่านอนุมัติ',
+    message:`${leaveTextV24(l.type)} ${numV24(l.hours,0).toFixed(2)} ชม. (${safeText(l.startDate)} ถึง ${safeText(l.endDate)}) ${ok?'อนุมัติแล้ว':'ไม่ผ่านอนุมัติ'}`,
+    read:false,
+    relatedType:'leave',
+    relatedId:id,
+    createdAt:firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await logAudit(ok?'APPROVE_LEAVE':'REJECT_LEAVE',{id,employeeCode:l.employeeCode,type:l.type,hours:l.hours});
+  toast(ok?'อนุมัติวันลาแล้ว':'ไม่อนุมัติวันลาแล้ว');
+  loadLeave();
+};
+
+// Payroll override: include approved paid/unpaid/absent leave and avoid extra composite indexes by filtering in memory.
+function approvedLeaveHoursInRangeV24(leaves,start,end){
+  return leaves.filter(l=>l.status==='approved' && String(l.startDate||'')<=end && String(l.endDate||'')>=start);
+}
+function calcPayrollV24(e, rows, ots, benefits, leaves, start, end){
+  const base=calcPayroll(e,rows,ots,benefits,start,end);
+  const hourly=base.hourlyRate || 0;
+  const approved=approvedLeaveHoursInRangeV24(leaves,start,end);
+  let paidLeaveHours=0, unpaidLeaveHours=0, absentHours=0;
+  approved.forEach(l=>{
+    const h=numV24(l.hours,0);
+    if(l.payMode==='paid' && LEAVE_QUOTA_TYPES_V24.includes(l.type)) paidLeaveHours+=h;
+    else if(l.payMode==='absence' || l.type==='absent') absentHours+=h;
+    else unpaidLeaveHours+=h;
+  });
+  let paidLeavePay=0, leaveDeduction=0;
+  if(base.payType==='monthly'){
+    leaveDeduction=(unpaidLeaveHours+absentHours)*hourly;
+  }else if(base.payType==='daily'){
+    paidLeavePay=(paidLeaveHours/8)*base.dailyRate;
+  }else{
+    paidLeavePay=paidLeaveHours*hourly;
+  }
+  base.paidLeaveHours=paidLeaveHours;
+  base.unpaidLeaveHours=unpaidLeaveHours;
+  base.absentHours=absentHours;
+  base.paidLeavePay=paidLeavePay;
+  base.leaveDeduction=leaveDeduction;
+  base.grossPay=(base.grossPay||0)+paidLeavePay;
+  base.netPay=(base.netPay||0)+paidLeavePay-leaveDeduction;
+  base.leaveLines=approved.map(l=>({type:l.type,payMode:l.payMode,unit:l.unit,hours:numV24(l.hours,0),startDate:l.startDate,endDate:l.endDate,reason:l.reason||''}));
+  base.statusText = `${base.statusText || ''}${approved.length?` • วันลาอนุมัติ ${approved.length} รายการ`:''}`;
+  return base;
+}
+
+runPayroll = async function(){
+  const start=$('payStart').value, end=$('payEnd').value, box=$('payrollList');
+  if(!start||!end){toast('กรุณาเลือกวันเริ่มต้นและวันสิ้นสุด'); return;}
+  box.innerHTML='<p class="muted">กำลังคำนวณ payroll...</p>';
+  try{
+    const [empSnap,attSnap,otSnap,benefitsSnap,leaveSnap]=await Promise.all([
+      db.collection('employees').get(),
+      db.collection('attendance').where('dateKey','>=',start).where('dateKey','<=',end).get(),
+      db.collection('otRequests').get(),
+      db.collection('benefits').where('active','==',true).get(),
+      db.collection('leaveRequests').get()
+    ]);
+    const employees=empSnap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role!=='admin'&&e.active!==false);
+    const records=attSnap.docs.map(d=>normalizeAttendance(d.id,d.data()));
+    const ots=otSnap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.status==='approved' && String(o.dateKey||'')>=start && String(o.dateKey||'')<=end);
+    const benefits=benefitsSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const leaves=leaveSnap.docs.map(d=>({id:d.id,...d.data()}));
+    await getShifts();
+    lastPayrollRows=employees.map(e=>calcPayrollV24(
+      e,
+      records.filter(r=>r.employeeId===e.id||r.employeeCode===e.employeeCode),
+      ots.filter(o=>o.employeeId===e.id||o.employeeCode===e.employeeCode),
+      benefits,
+      leaves.filter(l=>l.employeeId===e.id||l.employeeCode===e.employeeCode),
+      start,end
+    ));
+    const totalBase=lastPayrollRows.reduce((s,r)=>s+r.basePay,0);
+    const totalOt=lastPayrollRows.reduce((s,r)=>s+r.otPay,0);
+    const totalBenefits=lastPayrollRows.reduce((s,r)=>s+r.benefitsPay,0);
+    const totalPaidLeave=lastPayrollRows.reduce((s,r)=>s+(r.paidLeavePay||0),0);
+    const totalLeaveDeduct=lastPayrollRows.reduce((s,r)=>s+(r.leaveDeduction||0),0);
+    const totalDeduct=lastPayrollRows.reduce((s,r)=>s+r.lateDeduction,0);
+    const totalNet=lastPayrollRows.reduce((s,r)=>s+r.netPay,0);
+    const summary=`<div class="payroll-summary"><div class="stat"><b>${lastPayrollRows.length}</b><span>พนักงาน</span></div><div class="stat"><b>${money(totalBase)}</b><span>ฐานเงิน</span></div><div class="stat"><b>${money(totalOt)}</b><span>OT</span></div><div class="stat"><b>${money(totalBenefits)}</b><span>สวัสดิการ</span></div><div class="stat"><b>${money(totalPaidLeave)}</b><span>ลาจ่ายเงิน</span></div><div class="stat"><b>${money(totalLeaveDeduct+totalDeduct)}</b><span>หักลา/สาย</span></div><div class="stat strong"><b>${money(totalNet)}</b><span>สุทธิต้องจ่าย</span></div></div>`;
+    const rowsHtml=lastPayrollRows.map(r=>{
+      const print=canPrintSlip(r)?`<button class="secondary" onclick="printSlip('${r.employeeId}')">พิมพ์ Slip</button>`:`<span class="disabled-note">${safeText(slipDisabledReason(r)||r.statusText)}</span>`;
+      const leavesHtml=(r.leaveLines||[]).map(l=>`<div class="mini-row">${leaveTextV24(l.type)} • ${leavePayTextV24(l.payMode)} • ${numV24(l.hours,0).toFixed(2)} ชม. • ${safeText(l.startDate)} ถึง ${safeText(l.endDate)}</div>`).join('')||'<div class="mini-row muted">ไม่มีวันลาอนุมัติในงวดนี้</div>';
+      return `<div class="item payroll-item"><b>${safeText(r.employeeCode)} ${safeText(r.fullName)}</b> <span class="badge">${safeText(payTypeText(r.payType))}</span><br><span class="muted">งวด ${r.periodStart} ถึง ${r.periodEnd} • วันเงินออก ${r.payDate} • กะ ${safeText(r.shiftName||'-')} • พัก ${r.shiftBreakMinutes} นาที</span><br><div class="pay-line">วันทำงาน <b>${r.workDays}</b> • ปกติ ${r.regularHours.toFixed(2)} ชม. • OT ${r.approvedOtHours.toFixed(2)} ชม. • ลาจ่ายเงิน ${numV24(r.paidLeaveHours,0).toFixed(2)} ชม. • ไม่จ่าย/ขาด ${numV24(r.unpaidLeaveHours+r.absentHours,0).toFixed(2)} ชม.</div><div class="pay-total">ฐาน ${money(r.basePay)} + OT ${money(r.otPay)} + สวัสดิการ ${money(r.benefitsPay)} + ลาจ่ายเงิน ${money(r.paidLeavePay)} - หักลา ${money(r.leaveDeduction)} - หักสาย ${money(r.lateDeduction)} = <b>${money(r.netPay)} บาท</b></div><details><summary>รายละเอียดวันลา</summary>${leavesHtml}</details><div class="row-actions">${print}</div></div>`;
+    }).join('');
+    box.innerHTML=summary+`<p class="muted">งวด ${start} ถึง ${end} • พนักงาน ${employees.length} คน • เวลาเข้าออก ${records.length} รายการ • OT อนุมัติ ${ots.length} รายการ • วันลาอนุมัติ ${leaves.filter(l=>l.status==='approved').length} รายการ</p>`+(rowsHtml||'<p class="muted">ไม่พบพนักงานที่เปิดใช้งาน</p>');
+    await logAudit('RUN_PAYROLL_V24',{start,end,employees:employees.length,totalNet});
+  }catch(e){console.error(e); box.innerHTML=`<p class="muted">คำนวณ payroll ไม่สำเร็จ: ${safeText(e.message)}</p>`; toast('คำนวณ payroll ไม่สำเร็จ: '+e.message,7000);}
+};
+
+const exportPayrollBaseV24=exportPayroll;
+exportPayroll=function(){
+  exportCsv(`payroll-detailed-v24-${todayKey()}.csv`, lastPayrollRows.map(r=>({
+    employeeCode:r.employeeCode, fullName:r.fullName, department:r.department, payType:payTypeText(r.payType), payCycle:r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน',
+    periodStart:r.periodStart, periodEnd:r.periodEnd, payDate:r.payDate, workDays:r.workDays, regularHours:r.regularHours?.toFixed?.(2)||0, approvedOtHours:r.approvedOtHours?.toFixed?.(2)||0,
+    paidLeaveHours:numV24(r.paidLeaveHours,0).toFixed(2), unpaidLeaveHours:numV24(r.unpaidLeaveHours,0).toFixed(2), absentHours:numV24(r.absentHours,0).toFixed(2),
+    basePay:r.basePay, otPay:r.otPay, benefitsPay:r.benefitsPay, paidLeavePay:r.paidLeavePay||0, leaveDeduction:r.leaveDeduction||0, lateDeduction:r.lateDeduction, netPay:r.netPay, status:r.statusText
+  })));
+};
+
+function rebindV24(){
+  enhanceLeaveUiV24();
+  if($('submitLeaveBtn')) $('submitLeaveBtn').onclick=submitLeave;
+  if($('loadLeaveBtn')) $('loadLeaveBtn').onclick=loadLeave;
+  if($('saveEmployeeBtn')) $('saveEmployeeBtn').onclick=saveEmployee;
+  if($('clearEmployeeBtn')) $('clearEmployeeBtn').onclick=clearEmployeeForm;
+  if($('runPayrollBtn')) $('runPayrollBtn').onclick=runPayroll;
+  if($('exportPayrollBtn')) $('exportPayrollBtn').onclick=exportPayroll;
+  if($('refreshLeaveBalanceBtn')) $('refreshLeaveBalanceBtn').onclick=loadLeaveBalanceV24;
+  if($('refreshNotificationsBtn')) $('refreshNotificationsBtn').onclick=loadNotificationsV24;
+}
+setTimeout(rebindV24,0);

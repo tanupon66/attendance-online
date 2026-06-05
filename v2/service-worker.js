@@ -1,4 +1,4 @@
-// v2.3
+// v2.4
 const CACHE='attendance-v2-2-20260605';
 const FILES=['./','./index.html','./styles.css','./app.js','./firebase-config.js','./manifest.webmanifest','./assets/icon.svg'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).catch(()=>{}));});
