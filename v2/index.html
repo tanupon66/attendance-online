@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Attendance Online v2</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+</head>
+<body>
+  <div id="toast" class="toast hidden"></div>
+  <header class="app-header">
+    <div>
+      <h1 id="companyName">ระบบลงเวลาออนไลน์</h1>
+      <p class="subtitle">Selfie • GPS • Payroll • Leave • OT</p>
+    </div>
+    <button id="installBtn" class="secondary hidden">ติดตั้งแอป</button>
+  </header>
+
+  <main>
+    <section id="setupPanel" class="panel hidden">
+      <h2>ตั้งค่า Firebase ก่อนใช้งาน</h2>
+      <p>ใส่ค่า Firebase Config จริงในไฟล์ <code>firebase-config.js</code> แล้วรีเฟรชหน้าเว็บ</p>
+    </section>
+
+    <section id="loginPanel" class="login-card hidden">
+      <h2>เข้าสู่ระบบ</h2>
+      <label>รหัสพนักงาน</label>
+      <input id="loginCode" autocomplete="username" placeholder="เช่น admin หรือ 001" />
+      <label>PIN</label>
+      <input id="loginPin" type="password" autocomplete="current-password" placeholder="PIN" />
+      <button id="loginBtn" class="primary full">เข้าสู่ระบบ</button>
+      <button id="seedAdminBtn" class="secondary full">สร้างแอดมินเริ่มต้น</button>
+      <p class="muted small">เริ่มต้น: admin / admin123 แล้วควรเปลี่ยน PIN ทันที</p>
+    </section>
+
+    <section id="employeePanel" class="hidden">
+      <div class="topbar-card">
+        <div>
+          <h2 id="empName">-</h2>
+          <p id="empDetail" class="muted"></p>
+          <p id="todayStatus" class="status-line"></p>
+        </div>
+        <button id="logoutBtn1" class="danger">ออก</button>
+      </div>
+
+      <div class="grid two">
+        <div class="card">
+          <h3>ลงเวลา</h3>
+          <video id="camera" autoplay playsinline muted></video>
+          <canvas id="snapshot" class="hidden"></canvas>
+          <img id="preview" class="preview hidden" alt="preview" />
+          <p id="gpsStatus" class="muted small"></p>
+          <div class="actions wrap">
+            <button id="startCameraBtn" class="secondary">เปิดกล้อง</button>
+            <button id="captureBtn" class="secondary">ถ่ายรูป + GPS</button>
+            <button id="clockInBtn" class="good">เข้างาน</button>
+            <button id="clockOutBtn" class="danger">ออกงาน</button>
+            <button id="autoClockBtn" class="primary">อัตโนมัติ</button>
+          </div>
+          <p class="muted small">ระบบจะบังคับถ่ายรูปและ GPS ทุกครั้งก่อนลงเวลา</p>
+        </div>
+
+        <div class="card">
+          <h3>ขอ OT / วันลา</h3>
+          <div class="form-grid">
+            <label>วันที่ OT</label><input id="userOtDate" type="date" />
+            <label>ชั่วโมง OT ที่ขอ</label><input id="userOtHours" type="number" step="0.25" min="0" placeholder="เช่น 2" />
+            <label>เหตุผล OT</label><input id="userOtReason" placeholder="เหตุผล" />
+          </div>
+          <button id="submitOtBtn" class="primary full">ส่งคำขอ OT</button>
+          <hr>
+          <div class="form-grid">
+            <label>ประเภทลา</label>
+            <select id="leaveType"><option value="personal">ลากิจ</option><option value="sick">ลาป่วย</option><option value="vacation">ลาพักร้อน</option></select>
+            <label>วันที่เริ่ม</label><input id="leaveStart" type="date" />
+            <label>วันที่สิ้นสุด</label><input id="leaveEnd" type="date" />
+            <label>เหตุผล</label><input id="leaveReason" />
+          </div>
+          <button id="submitLeaveBtn" class="secondary full">ส่งคำขอลา</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><h3>ประวัติของฉัน</h3><button id="refreshMyHistoryBtn" class="secondary">รีเฟรช</button></div>
+        <div id="myHistory" class="list"></div>
+      </div>
+    </section>
+
+    <section id="adminPanel" class="hidden">
+      <div class="topbar-card">
+        <div><h2>ผู้ดูแลระบบ</h2><p id="adminName" class="muted"></p></div>
+        <button id="logoutBtn2" class="danger">ออก</button>
+      </div>
+
+      <nav class="tabs">
+        <button data-tab="dashboard" class="active">วันนี้</button>
+        <button data-tab="employees">พนักงาน</button>
+        <button data-tab="attendance">เวลาเข้าออก</button>
+        <button data-tab="shifts">กะงาน</button>
+        <button data-tab="ot">OT</button>
+        <button data-tab="leave">วันลา</button>
+        <button data-tab="calendar">ปฏิทิน</button>
+        <button data-tab="benefits">สวัสดิการ</button>
+        <button data-tab="payroll">Payroll</button>
+        <button data-tab="settings">ตั้งค่า</button>
+        <button data-tab="logs">Logs</button>
+      </nav>
+
+      <div id="tabDashboard" class="tab card">
+        <div class="section-title"><h3>ภาพรวมวันนี้</h3><button id="refreshTodayBtn" class="secondary">รีเฟรช</button></div>
+        <div id="todaySummary" class="stats"></div>
+        <div id="todayList" class="list"></div>
+      </div>
+
+      <div id="tabEmployees" class="tab card hidden">
+        <h3>จัดการพนักงาน</h3>
+        <input id="empIdEdit" type="hidden" />
+        <div class="form-grid big">
+          <label>รหัส *</label><input id="empCode" />
+          <label>ชื่อ *</label><input id="empFullName" />
+          <label>PIN</label><input id="empPin" placeholder="ใส่เมื่อเพิ่มหรือเปลี่ยน PIN" />
+          <label>แผนก</label><input id="empDept" />
+          <label>ตำแหน่ง</label><input id="empPosition" />
+          <label>สิทธิ์</label><select id="empRole"><option value="employee">employee</option><option value="admin">admin</option></select>
+          <label>วิธีจ่าย</label><select id="empPayType"><option value="hourly">รายชั่วโมง</option><option value="daily">รายวัน</option><option value="monthly">รายเดือน</option></select>
+          <label>รอบจ่าย</label><select id="empPayCycle"><option value="monthly">รายเดือน</option><option value="biweekly">ราย 14 วัน</option></select>
+          <label>ค่าแรง/ชม.</label><input id="empHourly" type="number" step="0.01" />
+          <label>ค่าแรง/วัน</label><input id="empDaily" type="number" step="0.01" />
+          <label>เงินเดือน</label><input id="empMonthly" type="number" step="0.01" />
+          <label>OT x</label><input id="empOt" type="number" step="0.01" />
+          <label>กะงาน</label><select id="empShiftId"></select>
+          <label>ใช้งาน</label><label class="check"><input id="empActive" type="checkbox" checked /> ใช้งาน</label>
+        </div>
+        <div class="actions"><button id="saveEmployeeBtn" class="primary">บันทึก</button><button id="clearEmployeeBtn" class="secondary">ล้างฟอร์ม</button></div>
+        <div id="employeeList" class="list"></div>
+      </div>
+
+      <div id="tabAttendance" class="tab card hidden">
+        <h3>รายการเข้าออกงาน</h3>
+        <div class="filters"><input id="attStart" type="date" /><input id="attEnd" type="date" /><button id="loadAttendanceBtn" class="primary">โหลด</button><button id="exportAttendanceBtn" class="secondary">Export CSV</button></div>
+        <p class="muted small">แสดง 1 คนต่อ 1 วันเป็น 1 รายการ พร้อมเวลาเข้า/ออก รูป แผนที่ และ OT ที่อนุมัติ</p>
+        <div id="attendanceList" class="list"></div>
+        <hr>
+        <h4>เพิ่ม/แก้ไขเวลาโดยแอดมิน</h4>
+        <div class="form-grid">
+          <label>รหัสพนักงาน</label><input id="corrEmpCode" />
+          <label>วันที่</label><input id="corrDate" type="date" />
+          <label>เวลา</label><input id="corrTime" type="time" />
+          <label>ประเภท</label><select id="corrType"><option value="IN">เข้างาน</option><option value="OUT">ออกงาน</option></select>
+          <label>เหตุผล</label><input id="corrReason" />
+        </div>
+        <button id="saveCorrectionBtn" class="warning">บันทึกการแก้ไข</button>
+      </div>
+
+      <div id="tabShifts" class="tab card hidden">
+        <h3>กำหนดกะ</h3>
+        <input id="shiftIdEdit" type="hidden" />
+        <div class="form-grid">
+          <label>ชื่อกะ</label><input id="shiftName" placeholder="เช่น กะเช้า" />
+          <label>เริ่ม</label><input id="shiftStart" type="time" />
+          <label>เลิก</label><input id="shiftEnd" type="time" />
+          <label>พัก (นาที)</label><input id="shiftBreak" type="number" value="60" />
+          <label>ชั่วโมงปกติ</label><input id="shiftRegular" type="number" step="0.25" value="8" />
+        </div>
+        <div class="actions"><button id="saveShiftBtn" class="primary">บันทึกกะ</button><button id="clearShiftBtn" class="secondary">ล้าง</button></div>
+        <div id="shiftList" class="list"></div>
+      </div>
+
+      <div id="tabOt" class="tab card hidden">
+        <div class="section-title"><h3>คำขอ OT</h3><button id="loadOtBtn" class="secondary">รีเฟรช</button></div>
+        <div id="otList" class="list"></div>
+      </div>
+
+      <div id="tabLeave" class="tab card hidden">
+        <div class="section-title"><h3>วันลา</h3><button id="loadLeaveBtn" class="secondary">รีเฟรช</button></div>
+        <div id="leaveList" class="list"></div>
+      </div>
+
+      <div id="tabCalendar" class="tab card hidden">
+        <h3>ปฏิทินบริษัท</h3>
+        <input id="calIdEdit" type="hidden" />
+        <div class="form-grid">
+          <label>วันที่</label><input id="calDate" type="date" />
+          <label>ชื่อรายการ</label><input id="calTitle" />
+          <label>ประเภท</label><select id="calType"><option value="holiday">วันหยุด</option><option value="event">กิจกรรม</option><option value="payday">วันจ่ายเงิน</option></select>
+          <label>มีค่าจ้าง</label><label class="check"><input id="calPaid" type="checkbox" checked /> ใช่</label>
+        </div>
+        <button id="saveCalendarBtn" class="primary">บันทึกปฏิทิน</button>
+        <div id="calendarList" class="list"></div>
+      </div>
+
+      <div id="tabBenefits" class="tab card hidden">
+        <h3>สวัสดิการ / เงินเพิ่ม</h3>
+        <input id="benefitIdEdit" type="hidden" />
+        <div class="form-grid">
+          <label>ชื่อ</label><input id="benefitName" placeholder="เช่น ค่าอาหาร" />
+          <label>จำนวนเงิน</label><input id="benefitAmount" type="number" step="0.01" />
+          <label>วิธีคิด</label><select id="benefitMode"><option value="perWorkday">ตามวันทำงาน</option><option value="fixedMonthly">Fix รายเดือน</option></select>
+          <label>ใช้งาน</label><label class="check"><input id="benefitActive" type="checkbox" checked /> ใช้งาน</label>
+        </div>
+        <button id="saveBenefitBtn" class="primary">บันทึกสวัสดิการ</button>
+        <div id="benefitList" class="list"></div>
+      </div>
+
+      <div id="tabPayroll" class="tab card hidden">
+        <h3>คำนวณเงินเดือน</h3>
+        <div class="filters"><input id="payStart" type="date" /><input id="payEnd" type="date" /><button id="runPayrollBtn" class="primary">คำนวณ</button><button id="exportPayrollBtn" class="secondary">Export CSV</button></div>
+        <div id="payrollList" class="list"></div>
+      </div>
+
+      <div id="tabSettings" class="tab card hidden">
+        <h3>ตั้งค่าบริษัท / ความปลอดภัย</h3>
+        <div class="form-grid big">
+          <label>ชื่อบริษัท</label><input id="setCompany" />
+          <label>รัศมีอนุญาต (เมตร)</label><input id="setRadius" type="number" />
+          <label>Latitude</label><input id="setLat" />
+          <label>Longitude</label><input id="setLng" />
+        </div>
+        <div class="actions"><button id="useCurrentLocationBtn" class="secondary">ใช้ตำแหน่งตอนนี้</button><button id="saveSettingsBtn" class="primary">บันทึกตั้งค่า</button></div>
+        <hr>
+        <h4>ล้างข้อมูล</h4>
+        <div class="actions wrap">
+          <button id="clearAttendanceBtn" class="danger">ลบข้อมูลเวลาเข้าออก</button>
+          <button id="clearAuditBtn" class="danger">เคลียร์ Log</button>
+        </div>
+      </div>
+
+      <div id="tabLogs" class="tab card hidden">
+        <div class="section-title"><h3>Audit Logs</h3><button id="loadAuditBtn" class="secondary">โหลด</button></div>
+        <div id="auditList" class="list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
