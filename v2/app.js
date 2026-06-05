@@ -1005,3 +1005,268 @@ function rebindV24(){
   if($('refreshNotificationsBtn')) $('refreshNotificationsBtn').onclick=loadNotificationsV24;
 }
 setTimeout(rebindV24,0);
+
+/* =========================================================
+   v2.6 Workday Summary + Editable Company Calendar
+   - กำหนดแต่ละวันเป็น วันทำงาน/วันหยุดจ่าย/วันหยุดไม่จ่าย/วันหยุดเปิด OT
+   - สรุป ขาดงาน/มาสาย/ไม่สมบูรณ์ จากปฏิทิน+กะ+ลา+เวลา
+   - Payroll ใช้ summary เพื่อหักขาดงานรายเดือน และแสดงสถานะรายวัน
+   ========================================================= */
+const CAL_TYPES_V26 = {
+  workday: 'วันทำงาน',
+  holiday_paid: 'วันหยุดแบบจ่ายเงิน',
+  holiday_unpaid: 'วันหยุดไม่จ่ายเงิน',
+  ot_open: 'วันหยุดแต่เปิด OT',
+  event: 'กิจกรรม',
+  payday: 'วันจ่ายเงิน',
+  holiday: 'วันหยุด'
+};
+const DAY_STATUS_V26 = {
+  PRESENT: 'ปกติ',
+  LATE: 'มาสาย',
+  ABSENT: 'ขาดงาน',
+  INCOMPLETE: 'ข้อมูลไม่ครบ',
+  LEAVE_PAID: 'ลาจ่ายเงิน',
+  LEAVE_UNPAID: 'ลาไม่จ่ายเงิน',
+  HOLIDAY_PAID: 'วันหยุดจ่ายเงิน',
+  HOLIDAY_UNPAID: 'วันหยุด',
+  HOLIDAY_OT: 'วันหยุดเปิด OT',
+  NON_WORKDAY: 'ไม่ใช่วันทำงาน'
+};
+function dateRangeV26(start,end){
+  const out=[]; let d=parseDateKey(start), last=parseDateKey(end);
+  if(!d||!last) return out;
+  while(d<=last){ out.push(dateKeyOf(d)); d=addDays(d,1); }
+  return out;
+}
+function minutesFromTimeV26(t){ if(!t) return 0; const [h,m]=String(t).split(':').map(Number); return (h||0)*60+(m||0); }
+function calendarTypeTextV26(t){ return CAL_TYPES_V26[t] || t || '-'; }
+function dayStatusTextV26(s){ return DAY_STATUS_V26[s] || s || '-'; }
+function isPaidCalTypeV26(type){ return type==='holiday_paid' || type==='payday' || type==='holiday'; }
+function defaultCalendarForDateV26(dateKey){
+  const d=parseDateKey(dateKey); const dow=d?d.getDay():0;
+  if(dow===0) return {dateKey,type:'holiday_unpaid',title:'วันหยุดประจำสัปดาห์',isPaid:false,allowOt:false,isDefault:true};
+  return {dateKey,type:'workday',title:'วันทำงาน',isPaid:false,allowOt:false,isDefault:true};
+}
+function normalizeCalEventV26(e){
+  let type=e.type||'event';
+  if(type==='holiday') type=e.isPaid?'holiday_paid':'holiday_unpaid';
+  return {...e,type,isPaid: e.isPaid ?? isPaidCalTypeV26(type), allowOt: !!(e.allowOt || type==='ot_open'), isWorkday: e.isWorkday ?? type==='workday'};
+}
+async function getCalendarMapV26(start,end){
+  const snap=await db.collection('companyCalendar').get();
+  const map={};
+  snap.docs.forEach(d=>{
+    const x=normalizeCalEventV26({id:d.id,...d.data()});
+    if(!x.dateKey) return;
+    if(start && x.dateKey<start) return;
+    if(end && x.dateKey>end) return;
+    map[x.dateKey]=x;
+  });
+  return map;
+}
+function getDayCalendarV26(dateKey,calMap){ return calMap[dateKey] || defaultCalendarForDateV26(dateKey); }
+function leaveHoursOnDateV26(l,dateKey){
+  if(l.status!=='approved') return 0;
+  if(String(l.startDate||'')>dateKey || String(l.endDate||'')<dateKey) return 0;
+  return Number(l.hoursPerDay || l.hours || 8);
+}
+function approvedLeaveForDayV26(leaves,dateKey){
+  const rows=leaves.filter(l=>l.status==='approved' && String(l.startDate||'')<=dateKey && String(l.endDate||'')>=dateKey);
+  if(!rows.length) return null;
+  const paid=rows.find(l=>l.payMode==='paid');
+  const absent=rows.find(l=>l.payMode==='absence'||l.type==='absent');
+  const unpaid=rows.find(l=>l.payMode==='unpaid'||l.type==='unpaid');
+  return paid || absent || unpaid || rows[0];
+}
+function buildDailySummaryV26(employee, rawRows, leaves, calMap, start, end){
+  const shift=getShift(employee.shiftId);
+  const days=dateRangeV26(start,end);
+  const rawByDate={};
+  rawRows.forEach(r=>{ (rawByDate[r.dateKey] ||= []).push(r); });
+  return days.map(dateKey=>{
+    const cal=getDayCalendarV26(dateKey,calMap);
+    const records=(rawByDate[dateKey]||[]).sort((a,b)=>recMillis(a)-recMillis(b));
+    const ins=records.filter(r=>r.type==='IN');
+    const outs=records.filter(r=>r.type==='OUT');
+    const firstIn=ins[0]||null, lastOut=outs.at(-1)||null;
+    const leave=approvedLeaveForDayV26(leaves,dateKey);
+    const regularHours=Number(shift.regularHours||8);
+    const breakMinutes=Number(shift.breakMinutes||0);
+    let grossHours=(firstIn&&lastOut)?Math.max(0,(recMillis(lastOut)-recMillis(firstIn))/36e5):0;
+    let workHours=Math.max(0,grossHours-(grossHours>0?breakMinutes/60:0));
+    let lateMinutes=0;
+    if(firstIn && shift.start){
+      const std=new Date(`${dateKey}T${shift.start}:00`);
+      const actual=recTime(firstIn);
+      if(actual && actual>std) lateMinutes=Math.round((actual-std)/60000);
+    }
+    let status='NON_WORKDAY';
+    const isWorkday=cal.type==='workday';
+    if(leave){
+      if(leave.payMode==='paid') status='LEAVE_PAID';
+      else if(leave.payMode==='absence'||leave.type==='absent') status='ABSENT';
+      else status='LEAVE_UNPAID';
+    }else if(isWorkday){
+      if(!firstIn && !lastOut) status='ABSENT';
+      else if(firstIn && !lastOut) status='INCOMPLETE';
+      else if(lateMinutes>0) status='LATE';
+      else status='PRESENT';
+    }else if(cal.type==='holiday_paid') status='HOLIDAY_PAID';
+    else if(cal.type==='ot_open') status=records.length?'HOLIDAY_OT':'HOLIDAY_UNPAID';
+    else status='HOLIDAY_UNPAID';
+    return {employeeId:employee.id,employeeCode:employee.employeeCode,fullName:employee.fullName,dateKey,calendarType:cal.type,calendarTitle:cal.title,isWorkday,allowOt:!!cal.allowOt,firstIn,lastOut,records,grossHours,breakMinutes,workHours,regularHours,lateMinutes,status,leave,shiftName:shift.name||'-'};
+  });
+}
+function renderSummaryBadgeV26(s){
+  const good=['PRESENT','HOLIDAY_PAID','LEAVE_PAID'];
+  const bad=['ABSENT','INCOMPLETE'];
+  const warn=['LATE','LEAVE_UNPAID','HOLIDAY_OT'];
+  const cls=good.includes(s)?'good':bad.includes(s)?'bad':warn.includes(s)?'warning':'';
+  return `<span class="badge ${cls}">${dayStatusTextV26(s)}</span>`;
+}
+async function getAllEmployeesV26(){
+  const snap=await db.collection('employees').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role!=='admin'&&e.active!==false);
+}
+async function getLeavesAllV26(){ const snap=await db.collection('leaveRequests').get(); return snap.docs.map(d=>({id:d.id,...d.data()})); }
+async function computeSummariesV26(start,end){
+  await getShifts();
+  const [employees, attendanceRows, leaves, calMap]=await Promise.all([
+    getAllEmployeesV26(), getAttendanceRows(null,start,end), getLeavesAllV26(), getCalendarMapV26(start,end)
+  ]);
+  const summaries=[];
+  employees.forEach(e=>{
+    summaries.push(...buildDailySummaryV26(
+      e,
+      attendanceRows.filter(r=>r.employeeId===e.id||r.employeeCode===e.employeeCode),
+      leaves.filter(l=>l.employeeId===e.id||l.employeeCode===e.employeeCode),
+      calMap,start,end
+    ));
+  });
+  return summaries;
+}
+function summaryToDailyItemV26(s){
+  const r={employeeId:s.employeeId,employeeCode:s.employeeCode,fullName:s.fullName,dateKey:s.dateKey,records:s.records,firstIn:s.firstIn,lastOut:s.lastOut,photoURL:s.firstIn?.photoURL||s.lastOut?.photoURL||'',mapUrl:s.firstIn?.mapUrl||s.lastOut?.mapUrl||'',inGeofence:s.firstIn?.inGeofence,distanceMeters:s.firstIn?.distanceMeters,workHours:s.workHours};
+  const base=renderDailyItem(r,true);
+  return base.replace('</div></div>',`${renderSummaryBadgeV26(s.status)} <span class="badge">${calendarTypeTextV26(s.calendarType)}</span>${s.lateMinutes?` <span class="badge warning">สาย ${s.lateMinutes} นาที</span>`:''}</div></div>`);
+}
+loadTodayAdmin = async function(){
+  const summaries=await computeSummariesV26(todayKey(),todayKey());
+  const present=summaries.filter(s=>['PRESENT','LATE'].includes(s.status)).length;
+  const late=summaries.filter(s=>s.status==='LATE').length;
+  const absent=summaries.filter(s=>s.status==='ABSENT').length;
+  const leave=summaries.filter(s=>s.status.startsWith('LEAVE')).length;
+  $('todaySummary').innerHTML=`<div class="stat"><b>${summaries.length}</b><span>พนักงาน</span></div><div class="stat"><b>${present}</b><span>มาทำงาน</span></div><div class="stat"><b>${late}</b><span>มาสาย</span></div><div class="stat"><b>${absent}</b><span>ขาดงาน</span></div><div class="stat"><b>${leave}</b><span>ลา</span></div>`;
+  $('todayList').innerHTML=summaries.map(summaryToDailyItemV26).join('')||'<p class="muted">วันนี้ยังไม่มีข้อมูล</p>';
+};
+loadAttendance = async function(){
+  const start=$('attStart').value, end=$('attEnd').value;
+  const summaries=await computeSummariesV26(start,end);
+  lastAttendanceRows=summaries;
+  $('attendanceList').innerHTML=summaries.map(summaryToDailyItemV26).join('')||'<p class="muted">ไม่พบข้อมูล</p>';
+};
+function enhanceCalendarUiV26(){
+  const sel=$('calType'); if(sel){
+    sel.innerHTML=`<option value="workday">วันทำงาน</option><option value="holiday_paid">วันหยุดแบบจ่ายเงิน</option><option value="holiday_unpaid">วันหยุดไม่จ่ายเงิน</option><option value="ot_open">วันหยุดแต่เปิด OT</option><option value="event">กิจกรรม</option><option value="payday">วันจ่ายเงิน</option>`;
+  }
+  if($('calPaid') && !$('calAllowOt')){
+    const fg=$('calPaid').closest('.form-grid');
+    const label=document.createElement('label'); label.textContent='เปิด OT';
+    const wrap=document.createElement('label'); wrap.className='check'; wrap.innerHTML='<input id="calAllowOt" type="checkbox" /> อนุญาตขอ OT วันนี้';
+    fg.appendChild(label); fg.appendChild(wrap);
+    const note=document.createElement('p'); note.className='muted small'; note.textContent='กดวันที่ในปฏิทินเพื่อแก้ไขสถานะวันนั้นได้ทุกวัน'; fg.parentNode.insertBefore(note,fg.nextSibling);
+  }
+}
+function calendarClassV26(t){return t==='workday'?'workday':t==='holiday_paid'?'holiday-paid':t==='holiday_unpaid'?'holiday-unpaid':t==='ot_open'?'ot-open':t==='payday'?'payday':'event';}
+renderMonthGrid = function(targetId,events=[],employee=null,monthValue=null){
+  const target=$(targetId); if(!target) return;
+  const base=monthValue?new Date(`${monthValue}-01T00:00:00`):new Date();
+  const y=base.getFullYear(), m=base.getMonth(), first=new Date(y,m,1), total=daysInMonth(y,m), startDow=first.getDay();
+  const names=['อา','จ','อ','พ','พฤ','ศ','ส'];
+  const byDate={}; [...events,...buildPaydayEvents(y,m)].forEach(e=>{const x=normalizeCalEventV26(e); (byDate[x.dateKey]||=[]).push(x)});
+  let html=names.map(n=>`<div class="cal-head">${n}</div>`).join('');
+  for(let i=0;i<startDow;i++) html+='<div class="cal-day off"></div>';
+  for(let day=1;day<=total;day++){
+    const key=`${y}-${pad(m+1)}-${pad(day)}`; const today=key===todayKey();
+    const cal=byDate[key]?.[0] || defaultCalendarForDateV26(key);
+    const cls=calendarClassV26(cal.type);
+    const editable=targetId==='calendarGrid';
+    html+=`<div class="cal-day ${today?'today':''} ${cls} ${editable?'editable':''}" ${editable?`onclick="openCalendarDayV26('${key}')"`:''}><div class="cal-num">${day}</div><span class="cal-event ${cls}">${safeText(calendarTypeTextV26(cal.type))}</span>${cal.title?`<span class="cal-event event">${safeText(cal.title)}</span>`:''}${cal.allowOt?'<span class="cal-event ot-open">เปิด OT</span>':''}</div>`;
+  }
+  target.innerHTML=html;
+};
+window.openCalendarDayV26 = async function(dateKey){
+  const doc=await db.collection('companyCalendar').doc(dateKey).get();
+  const c=doc.exists?normalizeCalEventV26({id:doc.id,...doc.data()}):defaultCalendarForDateV26(dateKey);
+  $('calIdEdit').value=dateKey; $('calDate').value=dateKey; $('calType').value=c.type||'workday'; $('calTitle').value=c.title||calendarTypeTextV26(c.type); $('calPaid').checked=!!c.isPaid; if($('calAllowOt')) $('calAllowOt').checked=!!c.allowOt;
+  toast('โหลดวันที่ '+dateKey+' เข้าแบบฟอร์มแล้ว');
+};
+saveCalendar = async function(){
+  enhanceCalendarUiV26();
+  const dateKey=$('calDate').value; if(!dateKey) return toast('กรุณาเลือกวันที่');
+  const type=$('calType').value||'workday';
+  const data={dateKey,title:$('calTitle').value.trim()||calendarTypeTextV26(type),type,isPaid:$('calPaid').checked||isPaidCalTypeV26(type),allowOt:!!($('calAllowOt')?.checked)||type==='ot_open',isWorkday:type==='workday',updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:currentEmployee?.employeeCode||''};
+  await db.collection('companyCalendar').doc(dateKey).set(data,{merge:true});
+  await logAudit('SAVE_CALENDAR_DAY_V26',data);
+  toast('บันทึกปฏิทิน '+dateKey+' แล้ว');
+  await loadCalendar();
+};
+loadCalendar = async function(){
+  enhanceCalendarUiV26();
+  const mv=$('calMonth')?.value || todayKey().slice(0,7); const [y,m]=mv.split('-').map(Number); const start=`${y}-${pad(m)}-01`, end=`${y}-${pad(m)}-${pad(daysInMonth(y,m-1))}`;
+  const calMap=await getCalendarMapV26(start,end); const events=Object.values(calMap);
+  renderMonthGrid('calendarGrid',events,null,mv);
+  $('calendarList').innerHTML=dateRangeV26(start,end).map(d=>{const c=getDayCalendarV26(d,calMap);return `<div class="item"><b>${d} - ${safeText(c.title)}</b><br><span class="muted">${calendarTypeTextV26(c.type)} • ${c.isPaid?'มีค่าจ้าง':'ไม่มีค่าจ้าง'} • ${c.allowOt?'เปิด OT':'ไม่เปิด OT'}</span><div class="row-actions"><button class="warning" onclick="openCalendarDayV26('${d}')">แก้ไข</button>${!c.isDefault?`<button class="danger" onclick="deleteCalendar('${d}')">ลบค่าเฉพาะวัน</button>`:''}</div></div>`}).join('');
+};
+window.deleteCalendar=async function(id){ if(!confirm('ลบค่าเฉพาะวันนี้? ระบบจะกลับไปใช้ค่าเริ่มต้น')) return; await db.collection('companyCalendar').doc(id).delete(); await logAudit('DELETE_CALENDAR_DAY_V26',{id}); await loadCalendar(); };
+loadUserCalendar = async function(){
+  const now=new Date(); const start=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`; const end=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(daysInMonth(now.getFullYear(),now.getMonth()))}`;
+  const calMap=await getCalendarMapV26(start,end); await getShifts(); const sh=getShift(currentEmployee?.shiftId); renderMonthGrid('userCalendarGrid',Object.values(calMap),{...currentEmployee,shiftName:sh.name});
+};
+function calcPayrollV26(e, rows, ots, benefits, leaves, calMap, start, end){
+  const base=calcPayrollV24(e,rows,ots,benefits,leaves,start,end);
+  const summaries=buildDailySummaryV26(e,rows,leaves,calMap,start,end);
+  const absentDays=summaries.filter(s=>s.status==='ABSENT');
+  const incompleteDays=summaries.filter(s=>s.status==='INCOMPLETE');
+  const lateDays=summaries.filter(s=>s.status==='LATE');
+  const hourly=base.hourlyRate||0; const shift=getShift(e.shiftId); const regular=Number(shift.regularHours||8);
+  const absentHours=absentDays.length*regular;
+  const absentDeduction=(base.payType==='monthly')?absentHours*hourly:0;
+  base.absentAutoDays=absentDays.length; base.absentAutoHours=absentHours; base.incompleteDays=incompleteDays.length; base.lateDays=lateDays.length; base.attendanceStatusLines=summaries;
+  base.leaveDeduction=(base.leaveDeduction||0)+absentDeduction;
+  base.netPay=(base.netPay||0)-absentDeduction;
+  base.statusText=`ขาดงาน ${absentDays.length} วัน • มาสาย ${lateDays.length} วัน • ไม่ครบ ${incompleteDays.length} วัน`;
+  return base;
+}
+runPayroll = async function(){
+  const start=$('payStart').value, end=$('payEnd').value, box=$('payrollList'); if(!start||!end)return toast('กรุณาเลือกวันเริ่มต้นและวันสิ้นสุด'); box.innerHTML='<p class="muted">กำลังคำนวณ payroll + ขาดงาน/มาสาย...</p>';
+  try{
+    const [empSnap,attSnap,otSnap,benefitsSnap,leaveSnap,calMap]=await Promise.all([db.collection('employees').get(),db.collection('attendance').where('dateKey','>=',start).where('dateKey','<=',end).get(),db.collection('otRequests').get(),db.collection('benefits').where('active','==',true).get(),db.collection('leaveRequests').get(),getCalendarMapV26(start,end)]);
+    const employees=empSnap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role!=='admin'&&e.active!==false);
+    const records=attSnap.docs.map(d=>normalizeAttendance(d.id,d.data())); const ots=otSnap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.status==='approved'&&String(o.dateKey||'')>=start&&String(o.dateKey||'')<=end); const benefits=benefitsSnap.docs.map(d=>({id:d.id,...d.data()})); const leaves=leaveSnap.docs.map(d=>({id:d.id,...d.data()})); await getShifts();
+    lastPayrollRows=employees.map(e=>calcPayrollV26(e,records.filter(r=>r.employeeId===e.id||r.employeeCode===e.employeeCode),ots.filter(o=>o.employeeId===e.id||o.employeeCode===e.employeeCode),benefits,leaves.filter(l=>l.employeeId===e.id||l.employeeCode===e.employeeCode),calMap,start,end));
+    const totalNet=lastPayrollRows.reduce((s,r)=>s+r.netPay,0), totalAbsent=lastPayrollRows.reduce((s,r)=>s+(r.absentAutoDays||0),0), totalLate=lastPayrollRows.reduce((s,r)=>s+(r.lateDays||0),0);
+    const totalBase=lastPayrollRows.reduce((s,r)=>s+r.basePay,0), totalOt=lastPayrollRows.reduce((s,r)=>s+r.otPay,0), totalBenefits=lastPayrollRows.reduce((s,r)=>s+r.benefitsPay,0), totalDeduct=lastPayrollRows.reduce((s,r)=>s+(r.lateDeduction||0)+(r.leaveDeduction||0),0);
+    const summary=`<div class="payroll-summary"><div class="stat"><b>${lastPayrollRows.length}</b><span>พนักงาน</span></div><div class="stat"><b>${money(totalBase)}</b><span>ฐานเงิน</span></div><div class="stat"><b>${money(totalOt)}</b><span>OT</span></div><div class="stat"><b>${money(totalBenefits)}</b><span>สวัสดิการ</span></div><div class="stat"><b>${totalAbsent}</b><span>ขาดงาน</span></div><div class="stat"><b>${totalLate}</b><span>มาสาย</span></div><div class="stat"><b>${money(totalDeduct)}</b><span>หักรวม</span></div><div class="stat strong"><b>${money(totalNet)}</b><span>สุทธิต้องจ่าย</span></div></div>`;
+    const rowsHtml=lastPayrollRows.map(r=>{const dayDetails=(r.attendanceStatusLines||[]).map(s=>`<div class="mini-row">${s.dateKey} • ${renderSummaryBadgeV26(s.status)} • ${calendarTypeTextV26(s.calendarType)} • เข้า ${s.firstIn?displayTime(s.firstIn).slice(11):'-'} ออก ${s.lastOut?displayTime(s.lastOut).slice(11):'-'} • สาย ${s.lateMinutes} นาที</div>`).join(''); const print=canPrintSlip(r)?`<button class="secondary" onclick="printSlip('${r.employeeId}')">พิมพ์ Slip</button>`:`<span class="disabled-note">${safeText(slipDisabledReason(r)||r.statusText)}</span>`; return `<div class="item payroll-item"><b>${safeText(r.employeeCode)} ${safeText(r.fullName)}</b> <span class="badge">${payTypeText(r.payType)}</span><br><span class="muted">งวด ${r.periodStart} ถึง ${r.periodEnd} • วันเงินออก ${r.payDate} • ${safeText(r.statusText)}</span><br><div class="pay-total">ฐาน ${money(r.basePay)} + OT ${money(r.otPay)} + สวัสดิการ ${money(r.benefitsPay)} + ลาจ่าย ${money(r.paidLeavePay||0)} - หักลา/ขาด ${money(r.leaveDeduction||0)} - หักสาย ${money(r.lateDeduction||0)} = <b>${money(r.netPay)} บาท</b></div><details><summary>รายละเอียดสถานะรายวัน</summary>${dayDetails}</details><div class="row-actions">${print}</div></div>`}).join('');
+    box.innerHTML=summary+`<p class="muted">งวด ${start} ถึง ${end} • ใช้ปฏิทินบริษัทเพื่อสรุปขาดงาน/มาสายอัตโนมัติ</p>`+rowsHtml; await logAudit('RUN_PAYROLL_V26',{start,end,totalNet,totalAbsent,totalLate});
+  }catch(e){console.error(e); box.innerHTML=`<p class="muted">คำนวณ payroll ไม่สำเร็จ: ${safeText(e.message)}</p>`; toast('คำนวณ payroll ไม่สำเร็จ: '+e.message,7000)}
+};
+exportAttendance = function(){
+  exportCsv(`attendance-summary-v26-${todayKey()}.csv`, (lastAttendanceRows||[]).map(s=>({dateKey:s.dateKey,employeeCode:s.employeeCode,fullName:s.fullName,status:dayStatusTextV26(s.status),calendarType:calendarTypeTextV26(s.calendarType),clockIn:s.firstIn?displayTime(s.firstIn):'',clockOut:s.lastOut?displayTime(s.lastOut):'',workHours:Number(s.workHours||0).toFixed(2),lateMinutes:s.lateMinutes||0,rawRecords:s.records?.length||0,mapUrl:s.firstIn?.mapUrl||s.lastOut?.mapUrl||''})));
+};
+exportPayroll = function(){
+  exportCsv(`payroll-v26-${todayKey()}.csv`, lastPayrollRows.map(r=>({employeeCode:r.employeeCode,fullName:r.fullName,payType:payTypeText(r.payType),periodStart:r.periodStart,periodEnd:r.periodEnd,payDate:r.payDate,workDays:r.workDays,absentDays:r.absentAutoDays||0,lateDays:r.lateDays||0,incompleteDays:r.incompleteDays||0,regularHours:r.regularHours,approvedOtHours:r.approvedOtHours,paidLeaveHours:r.paidLeaveHours||0,unpaidLeaveHours:r.unpaidLeaveHours||0,absentLeaveHours:r.absentHours||0,basePay:r.basePay,otPay:r.otPay,benefitsPay:r.benefitsPay,paidLeavePay:r.paidLeavePay||0,leaveAndAbsentDeduction:r.leaveDeduction||0,lateDeduction:r.lateDeduction||0,netPay:r.netPay,status:r.statusText})));
+};
+function rebindV26(){
+  enhanceCalendarUiV26();
+  if($('saveCalendarBtn')) $('saveCalendarBtn').onclick=saveCalendar;
+  if($('loadCalendarBtn')) $('loadCalendarBtn').onclick=loadCalendar;
+  if($('refreshTodayBtn')) $('refreshTodayBtn').onclick=loadTodayAdmin;
+  if($('loadAttendanceBtn')) $('loadAttendanceBtn').onclick=loadAttendance;
+  if($('runPayrollBtn')) $('runPayrollBtn').onclick=runPayroll;
+  if($('exportAttendanceBtn')) $('exportAttendanceBtn').onclick=exportAttendance;
+  if($('exportPayrollBtn')) $('exportPayrollBtn').onclick=exportPayroll;
+}
+setTimeout(rebindV26,50);

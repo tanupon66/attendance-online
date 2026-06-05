@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Attendance Online v2.4</title>
+  <title>Attendance Online v2.6</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
@@ -17,7 +17,7 @@
   <header class="app-header">
     <div>
       <h1 id="companyName">ระบบลงเวลาออนไลน์</h1>
-      <p class="subtitle">Selfie • GPS • Payroll • Leave Quota • Calendar • OT</p>
+      <p class="subtitle">Selfie • GPS • Payroll • Leave • Work Calendar • Auto Absent/Late</p>
     </div>
     <button id="installBtn" class="secondary hidden">ติดตั้งแอป</button>
   </header>
@@ -202,7 +202,7 @@
         <div class="form-grid">
           <label>วันที่</label><input id="calDate" type="date" />
           <label>ชื่อรายการ</label><input id="calTitle" />
-          <label>ประเภท</label><select id="calType"><option value="holiday">วันหยุด</option><option value="event">กิจกรรม</option><option value="payday">วันจ่ายเงิน</option></select>
+          <label>ประเภท</label><select id="calType"><option value="workday">วันทำงาน</option><option value="holiday_paid">วันหยุดแบบจ่ายเงิน</option><option value="holiday_unpaid">วันหยุดไม่จ่ายเงิน</option><option value="ot_open">วันหยุดแต่เปิด OT</option><option value="event">กิจกรรม</option><option value="payday">วันจ่ายเงิน</option></select>
           <label>มีค่าจ้าง</label><label class="check"><input id="calPaid" type="checkbox" checked /> ใช่</label>
         </div>
         <button id="saveCalendarBtn" class="primary">บันทึกปฏิทิน</button>
