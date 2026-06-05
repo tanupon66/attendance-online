@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Attendance Online v2</title>
+  <title>Attendance Online v2.2</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
@@ -17,7 +17,7 @@
   <header class="app-header">
     <div>
       <h1 id="companyName">ระบบลงเวลาออนไลน์</h1>
-      <p class="subtitle">Selfie • GPS • Payroll • Leave • OT</p>
+      <p class="subtitle">Selfie • GPS • Payroll Slip • Calendar • Leave • OT</p>
     </div>
     <button id="installBtn" class="secondary hidden">ติดตั้งแอป</button>
   </header>
@@ -89,6 +89,19 @@
       <div class="card">
         <div class="section-title"><h3>ประวัติของฉัน</h3><button id="refreshMyHistoryBtn" class="secondary">รีเฟรช</button></div>
         <div id="myHistory" class="list"></div>
+      </div>
+
+      <div class="grid two">
+        <div class="card">
+          <div class="section-title"><h3>ปฏิทินทำงานของฉัน</h3><button id="refreshUserCalendarBtn" class="secondary">รีเฟรช</button></div>
+          <p class="muted small">แสดงวันทำงาน วันหยุด กิจกรรม และวันเงินออกของบริษัท</p>
+          <div id="userCalendarGrid" class="calendar-grid"></div>
+        </div>
+        <div class="card">
+          <div class="section-title"><h3>Payroll Slip ของฉัน</h3><button id="refreshUserSlipBtn" class="secondary">รีเฟรช</button></div>
+          <p class="muted small">พนักงานรายวัน/รายชั่วโมงพิมพ์สลิปหลังออกงานได้ รายเดือนดูรายละเอียดได้แต่ปิดพิมพ์</p>
+          <div id="userSlipList" class="list"></div>
+        </div>
       </div>
     </section>
 
@@ -183,7 +196,8 @@
       </div>
 
       <div id="tabCalendar" class="tab card hidden">
-        <h3>ปฏิทินบริษัท</h3>
+        <div class="section-title"><h3>ปฏิทินบริษัท</h3><div class="filters compact"><input id="calMonth" type="month" /><button id="loadCalendarBtn" class="secondary">โหลดปฏิทิน</button></div></div>
+        <div id="calendarGrid" class="calendar-grid"></div>
         <input id="calIdEdit" type="hidden" />
         <div class="form-grid">
           <label>วันที่</label><input id="calDate" type="date" />
@@ -210,7 +224,15 @@
 
       <div id="tabPayroll" class="tab card hidden">
         <h3>คำนวณเงินเดือน</h3>
-        <div class="filters"><input id="payStart" type="date" /><input id="payEnd" type="date" /><button id="runPayrollBtn" class="primary">คำนวณ</button><button id="exportPayrollBtn" class="secondary">Export CSV</button></div>
+        <div class="filters wrap">
+          <input id="payStart" type="date" />
+          <input id="payEnd" type="date" />
+          <button id="setCurrentPayPeriodBtn" class="secondary">ใช้งวดปัจจุบัน</button>
+          <button id="runPayrollBtn" class="primary">คำนวณ</button>
+          <button id="exportPayrollBtn" class="secondary">Export Payroll CSV</button>
+          <button id="exportPayrollSlipCsvBtn" class="secondary">Export Slip CSV</button>
+        </div>
+        <p class="muted small">รายวัน/รายชั่วโมงพิมพ์ slip ได้หลังมีเวลาออกงาน รายเดือนแสดงรายละเอียดแต่ปิดปุ่มพิมพ์ตามที่ตั้งค่าไว้</p>
         <div id="payrollList" class="list"></div>
       </div>
 
@@ -221,6 +243,8 @@
           <label>รัศมีอนุญาต (เมตร)</label><input id="setRadius" type="number" />
           <label>Latitude</label><input id="setLat" />
           <label>Longitude</label><input id="setLng" />
+          <label>วันเงินออกรายเดือน</label><input id="setMonthlyPayDay" type="number" min="1" max="31" placeholder="เช่น 30" />
+          <label>วันเริ่มงวดราย 14 วัน</label><input id="setBiweeklyStart" type="date" />
         </div>
         <div class="actions"><button id="useCurrentLocationBtn" class="secondary">ใช้ตำแหน่งตอนนี้</button><button id="saveSettingsBtn" class="primary">บันทึกตั้งค่า</button></div>
         <hr>

@@ -103,3 +103,171 @@ async function loadAudit(){const snap=await db.collection('auditLogs').orderBy('
 function bind(){$('loginBtn').onclick=login; $('seedAdminBtn').onclick=seedAdmin; $('logoutBtn1').onclick=logout; $('logoutBtn2').onclick=logout; $('startCameraBtn').onclick=startCamera; $('captureBtn').onclick=()=>captureSelfie().catch(e=>toast(e.message,5000)); $('clockInBtn').onclick=()=>clock('IN'); $('clockOutBtn').onclick=()=>clock('OUT'); $('autoClockBtn').onclick=autoClock; $('refreshMyHistoryBtn').onclick=loadMyHistory; $('submitOtBtn').onclick=submitOt; $('submitLeaveBtn').onclick=submitLeave; document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab)); $('refreshTodayBtn').onclick=loadTodayAdmin; $('saveEmployeeBtn').onclick=saveEmployee; $('clearEmployeeBtn').onclick=clearEmployeeForm; $('loadAttendanceBtn').onclick=loadAttendance; $('saveCorrectionBtn').onclick=saveCorrection; $('exportAttendanceBtn').onclick=exportAttendance; $('saveShiftBtn').onclick=saveShift; $('clearShiftBtn').onclick=clearShift; $('loadOtBtn').onclick=loadOt; $('loadLeaveBtn').onclick=loadLeave; $('saveCalendarBtn').onclick=saveCalendar; $('saveBenefitBtn').onclick=saveBenefit; $('runPayrollBtn').onclick=runPayroll; $('exportPayrollBtn').onclick=exportPayroll; $('useCurrentLocationBtn').onclick=()=>useCurrentLocation().catch(e=>toast(e.message,5000)); $('saveSettingsBtn').onclick=saveSettings; $('clearAttendanceBtn').onclick=()=>deleteCollection('attendance'); $('clearAuditBtn').onclick=()=>deleteCollection('auditLogs'); $('loadAuditBtn').onclick=loadAudit; window.addEventListener('beforeinstallprompt',e=>{e.preventDefault(); deferredPrompt=e; $('installBtn').classList.remove('hidden')}); $('installBtn').onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt(); deferredPrompt=null; $('installBtn').classList.add('hidden')}}}
 if('serviceWorker'in navigator) navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
 bind(); initFirebase().catch(e=>{console.error(e); toast(e.message,6000); showPanel('setupPanel')});
+
+/* =========================
+   v2.2.0 overrides
+   Payroll slip rules, payday settings, real calendar view, detailed CSV
+   ========================= */
+function addDays(d,n){const x=new Date(d); x.setDate(x.getDate()+n); return x}
+function dateKeyOf(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
+function daysInMonth(y,m){return new Date(y,m+1,0).getDate()}
+function parseDateKey(s){return new Date(`${s}T00:00:00`)}
+function clampPayDay(y,m,day){return `${y}-${pad(m+1)}-${pad(Math.min(Number(day||30),daysInMonth(y,m)))}`}
+function computeMonthlyPayDate(start,end){const ed=parseDateKey(end); return clampPayDay(ed.getFullYear(),ed.getMonth(),companySettings.monthlyPayDay||30)}
+function computeBiweeklyPayDate(start,end){return end}
+function computeCurrentPayPeriod(cycle='monthly'){
+  const now=new Date();
+  if(cycle==='biweekly'){
+    const anchor=companySettings.biweeklyStartDate?parseDateKey(companySettings.biweeklyStartDate):new Date(now.getFullYear(),0,1);
+    const diff=Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate())-anchor)/86400000);
+    const block=Math.floor(diff/14);
+    const s=addDays(anchor,block*14);
+    const e=addDays(s,13);
+    return {start:dateKeyOf(s),end:dateKeyOf(e),payDate:dateKeyOf(e)};
+  }
+  const y=now.getFullYear(), m=now.getMonth();
+  return {start:`${y}-${pad(m+1)}-01`,end:`${y}-${pad(m+1)}-${pad(daysInMonth(y,m))}`,payDate:clampPayDay(y,m,companySettings.monthlyPayDay||30)};
+}
+function getPayDateForRow(row){return row.payCycle==='biweekly'?computeBiweeklyPayDate(row.periodStart,row.periodEnd):computeMonthlyPayDate(row.periodStart,row.periodEnd)}
+function canPrintSlip(row){
+  // ตาม requirement: รายวัน/รายชั่วโมงพิมพ์ได้หลังมีเวลาออกงาน, รายเดือนแสดงรายละเอียดแต่ปิดพิมพ์
+  return row.payType!=='monthly' && row.hasClosedWork!==false;
+}
+function slipDisabledReason(row){
+  if(row.payType==='monthly') return 'รายเดือน: แสดงรายละเอียดได้ แต่ปิดการพิมพ์ตามนโยบาย';
+  if(row.hasClosedWork===false) return 'ยังไม่มีเวลาออกงาน จึงยังพิมพ์ไม่ได้';
+  return '';
+}
+async function fetchCalendarEvents(start,end){
+  const snap=await db.collection('companyCalendar').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>(x.dateKey||'')>=start&&(x.dateKey||'')<=end);
+}
+function buildPaydayEvents(year,month){
+  const events=[];
+  const monthly=clampPayDay(year,month,companySettings.monthlyPayDay||30);
+  events.push({dateKey:monthly,title:'วันเงินออกรายเดือน',type:'payday',isPaid:true,system:true});
+  if(companySettings.biweeklyStartDate){
+    let d=parseDateKey(companySettings.biweeklyStartDate);
+    const first=new Date(year,month,1), last=new Date(year,month,daysInMonth(year,month));
+    while(d<first) d=addDays(d,14);
+    while(d<=last){events.push({dateKey:dateKeyOf(d),title:'วันเงินออกราย 14 วัน',type:'payday',isPaid:true,system:true}); d=addDays(d,14)}
+  }
+  return events;
+}
+function renderMonthGrid(targetId,events=[],employee=null,monthValue=null){
+  const target=$(targetId); if(!target) return;
+  const base=monthValue?new Date(`${monthValue}-01T00:00:00`):new Date();
+  const y=base.getFullYear(), m=base.getMonth(), first=new Date(y,m,1), total=daysInMonth(y,m), startDow=first.getDay();
+  const names=['อา','จ','อ','พ','พฤ','ศ','ส'];
+  const byDate={}; [...events,...buildPaydayEvents(y,m)].forEach(e=>{(byDate[e.dateKey]||=[]).push(e)});
+  let html=names.map(n=>`<div class="cal-head">${n}</div>`).join('');
+  for(let i=0;i<startDow;i++) html+=`<div class="cal-day off"></div>`;
+  for(let day=1;day<=total;day++){
+    const key=`${y}-${pad(m+1)}-${pad(day)}`;
+    const dow=new Date(y,m,day).getDay();
+    const today=key===todayKey();
+    const evs=byDate[key]||[];
+    const isHoliday=evs.some(e=>e.type==='holiday');
+    const workLabel=(!isHoliday && dow!==0) ? (employee?.shiftName||'วันทำงาน') : '';
+    html+=`<div class="cal-day ${today?'today':''} ${dow===0?'off':''}"><div class="cal-num">${day}</div>${workLabel?`<span class="cal-event event">${safeText(workLabel)}</span>`:''}${evs.map(e=>`<span class="cal-event ${safeText(e.type||'event')}">${safeText(e.title||e.type)}</span>`).join('')}</div>`;
+  }
+  target.innerHTML=html;
+}
+async function loadUserCalendar(){
+  try{
+    const now=new Date(); const start=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`; const end=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(daysInMonth(now.getFullYear(),now.getMonth()))}`;
+    const events=await fetchCalendarEvents(start,end);
+    await getShifts(); const sh=getShift(currentEmployee?.shiftId); renderMonthGrid('userCalendarGrid',events,{...currentEmployee,shiftName:sh.name});
+  }catch(e){console.error(e); if($('userCalendarGrid')) $('userCalendarGrid').innerHTML=`<p class="muted">โหลดปฏิทินไม่สำเร็จ: ${safeText(e.message)}</p>`}
+}
+async function loadCalendar(){
+  const mv=$('calMonth')?.value || todayKey().slice(0,7);
+  const [y,m]=mv.split('-').map(Number); const start=`${y}-${pad(m)}-01`, end=`${y}-${pad(m)}-${pad(daysInMonth(y,m-1))}`;
+  const events=await fetchCalendarEvents(start,end);
+  renderMonthGrid('calendarGrid',events,null,mv);
+  $('calendarList').innerHTML=events.sort((a,b)=>String(a.dateKey).localeCompare(String(b.dateKey))).map(c=>`<div class="item"><b>${safeText(c.dateKey)} - ${safeText(c.title)}</b><br><span class="muted">${safeText(c.type)} • ${c.isPaid?'มีค่าจ้าง':'ไม่มีค่าจ้าง'}</span><div class="row-actions"><button class="danger" onclick="deleteCalendar('${c.id}')">ลบ</button></div></div>`).join('')||'<p class="muted">ยังไม่มีรายการปฏิทิน</p>';
+}
+async function showEmployee(){
+  showPanel('employeePanel');
+  $('empName').textContent=currentEmployee.fullName;
+  $('empDetail').textContent=`${currentEmployee.employeeCode} • ${currentEmployee.department||'-'} • ${currentEmployee.position||'-'} • ${payTypeText(currentEmployee.payType)} / ${currentEmployee.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'}`;
+  setUserDefaultDates();
+  await refreshMyStatus();
+  await loadMyHistory();
+  await loadUserCalendar();
+  await loadUserSlipPreview();
+}
+function renderDailyItem(r,admin){
+  const img=r.photoURL?`<img src="${r.photoURL}" class="thumb" loading="lazy">`:'';
+  const geo=r.inGeofence===null||r.inGeofence===undefined?'':`<span class="badge ${r.inGeofence?'good':'bad'}">${r.inGeofence?'ในพื้นที่':'นอกพื้นที่'} ${r.distanceMeters?Math.round(r.distanceMeters)+'m':''}</span>`;
+  const userPrint=(!admin && currentEmployee && (currentEmployee.payType==='daily'||currentEmployee.payType==='hourly') && r.lastOut) ? `<button class="secondary" onclick="printDailySlip('${r.dateKey}')">พิมพ์ Slip รายวัน</button>` : '';
+  const userMonthly=(!admin && currentEmployee?.payType==='monthly') ? `<span class="disabled-note">รายเดือนดูรายละเอียดได้ แต่ปิดพิมพ์</span>` : '';
+  return `<div class="item"><div>${img}<b>${safeText(r.employeeCode)} - ${safeText(r.fullName)}</b><br><span class="muted">${r.dateKey} • เข้า ${r.firstIn?displayTime(r.firstIn).slice(11):'-'} • ออก ${r.lastOut?displayTime(r.lastOut).slice(11):'-'} • ${r.workHours.toFixed(2)} ชม.</span><br>${geo} <span class="badge">${r.records.length} รายการ</span></div><div class="row-actions">${r.mapUrl?`<a href="${r.mapUrl}" target="_blank"><button class="ghost">แผนที่</button></a>`:''}${userPrint}${userMonthly}${admin?`<button class="ghost" onclick="copyText('${r.employeeId}')">คัดลอก ID</button>`:''}</div></div>`;
+}
+async function loadMyHistory(){
+  try{const rows=await getAttendanceRows(currentEmployee.id,null,null); const daily=pairAttendance(rows).slice(0,30); $('myHistory').innerHTML=daily.map(r=>renderDailyItem(r,false)).join('')||'<p class="muted">ยังไม่มีประวัติ</p>'}
+  catch(e){console.error(e); $('myHistory').innerHTML=`<p class="muted">โหลดประวัติไม่สำเร็จ: ${safeText(e.message)}</p>`}
+}
+async function loadUserSlipPreview(){
+  const box=$('userSlipList'); if(!box||!currentEmployee) return;
+  try{
+    const rows=await getAttendanceRows(currentEmployee.id,null,null); await getShifts(); const daily=pairAttendance(rows).slice(0,14);
+    if(!daily.length){box.innerHTML='<p class="muted">ยังไม่มีข้อมูลสำหรับ slip</p>'; return}
+    box.innerHTML=daily.map(d=>{
+      const tmp=calcPayroll(currentEmployee,d.records,[],[],d.dateKey,d.dateKey);
+      tmp.hasClosedWork=!!d.lastOut; tmp.dailyDate=d.dateKey;
+      const print=canPrintSlip(tmp)?`<button class="secondary" onclick="printDailySlip('${d.dateKey}')">พิมพ์ Slip</button>`:`<span class="disabled-note">${slipDisabledReason(tmp)}</span>`;
+      return `<div class="item"><b>${d.dateKey}</b><br><span class="muted">เข้า ${d.firstIn?displayTime(d.firstIn).slice(11):'-'} • ออก ${d.lastOut?displayTime(d.lastOut).slice(11):'-'} • ชั่วโมง ${d.workHours.toFixed(2)}</span><br>ยอดประมาณการ: <b>${money(tmp.netPay)} บาท</b><div class="row-actions">${print}</div></div>`;
+    }).join('');
+  }catch(e){box.innerHTML=`<p class="muted">โหลด slip ไม่สำเร็จ: ${safeText(e.message)}</p>`}
+}
+window.printDailySlip=async function(dateKey){
+  const rows=await getAttendanceRows(currentEmployee.id,dateKey,dateKey); await getShifts(); const d=pairAttendance(rows)[0]; if(!d||!d.lastOut){toast('ยังไม่มีเวลาออกงาน จึงพิมพ์ไม่ได้'); return}
+  const r=calcPayroll(currentEmployee,d.records,[],await getBenefits(),dateKey,dateKey); r.hasClosedWork=true; r.dailyDate=dateKey; printSlipHtml(r,true);
+}
+function fillSettings(){
+  $('setCompany').value=companySettings.companyName||''; $('setRadius').value=companySettings.radiusMeters||100; $('setLat').value=companySettings.officeLat||''; $('setLng').value=companySettings.officeLng||'';
+  if($('setMonthlyPayDay')) $('setMonthlyPayDay').value=companySettings.monthlyPayDay||30;
+  if($('setBiweeklyStart')) $('setBiweeklyStart').value=companySettings.biweeklyStartDate||todayKey();
+}
+async function saveSettings(){
+  companySettings={companyName:$('setCompany').value.trim()||'ระบบลงเวลาออนไลน์',radiusMeters:Number($('setRadius').value||100),officeLat:$('setLat').value?Number($('setLat').value):null,officeLng:$('setLng').value?Number($('setLng').value):null,monthlyPayDay:Number($('setMonthlyPayDay')?.value||30),biweeklyStartDate:$('setBiweeklyStart')?.value||todayKey()};
+  await db.collection('settings').doc('company').set({...companySettings,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true}); await logAudit('UPDATE_SETTINGS',companySettings); await loadSettings(); toast('บันทึกตั้งค่าแล้ว'); loadCalendar().catch(()=>{});
+}
+function setDefaultDates(){
+  const t=todayKey(); ['attStart','attEnd','payStart','payEnd','corrDate','calDate'].forEach(id=>{if($(id)) $(id).value=t}); if($('payStart')) $('payStart').value=t.slice(0,8)+'01'; if($('attStart')) $('attStart').value=t.slice(0,8)+'01'; if($('calMonth')) $('calMonth').value=t.slice(0,7); if($('setBiweeklyStart')&&!$('setBiweeklyStart').value) $('setBiweeklyStart').value=t;
+}
+function setCurrentPayPeriod(){const p=computeCurrentPayPeriod('monthly'); $('payStart').value=p.start; $('payEnd').value=p.end; toast(`ตั้งงวด ${p.start} ถึง ${p.end} / วันเงินออก ${p.payDate}`)}
+async function runPayroll(){
+  const start=$('payStart').value,end=$('payEnd').value; const [empSnap,attSnap,otSnap,benefitsSnap]=await Promise.all([db.collection('employees').get(),db.collection('attendance').where('dateKey','>=',start).where('dateKey','<=',end).get(),db.collection('otRequests').where('dateKey','>=',start).where('dateKey','<=',end).where('status','==','approved').get(),db.collection('benefits').where('active','==',true).get()]);
+  const employees=empSnap.docs.map(d=>({id:d.id,...d.data()})).filter(e=>e.role!=='admin'&&e.active!==false); const records=attSnap.docs.map(d=>normalizeAttendance(d.id,d.data())); const ots=otSnap.docs.map(d=>({id:d.id,...d.data()})); const benefits=benefitsSnap.docs.map(d=>({id:d.id,...d.data()})); await getShifts();
+  lastPayrollRows=employees.map(e=>calcPayroll(e,records.filter(r=>r.employeeId===e.id||r.employeeCode===e.employeeCode),ots.filter(o=>o.employeeId===e.id||o.employeeCode===e.employeeCode),benefits,start,end)).filter(r=>r.workDays>0||r.basePay>0);
+  $('payrollList').innerHTML=lastPayrollRows.map(r=>{const dis=slipDisabledReason(r); const print=canPrintSlip(r)?`<button class="secondary" onclick="printSlip('${r.employeeId}')">พิมพ์ Slip</button>`:`<span class="disabled-note">${dis}</span>`; return `<div class="item"><b>${safeText(r.employeeCode)} ${safeText(r.fullName)}</b><br><span class="muted">${payTypeText(r.payType)} • ${r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'} • งวด ${r.periodStart} ถึง ${r.periodEnd} • วันเงินออก ${r.payDate}</span><br><span class="muted">วันทำงาน ${r.workDays} • ปกติ ${r.regularHours.toFixed(2)} ชม. • OT อนุมัติ ${r.approvedOtHours.toFixed(2)} ชม. • สาย ${r.lateMinutes} นาที</span><br>ฐาน ${money(r.basePay)} + OT ${money(r.otPay)} + สวัสดิการ ${money(r.benefitsPay)} - หักสาย ${money(r.lateDeduction)} = <b>${money(r.netPay)} บาท</b><div class="row-actions">${print}</div></div>`}).join('')||'<p class="muted">ไม่พบข้อมูลเงินเดือน</p>';
+}
+function calcPayroll(e,rows,ots,benefits,start,end){
+  const daily=pairAttendance(rows); const shift=getShift(e.shiftId); let workDays=0,regularHours=0,lateMinutes=0; const dailyDetails=[];
+  daily.forEach(d=>{if(!d.firstIn||!d.lastOut){dailyDetails.push({dateKey:d.dateKey,clockIn:d.firstIn?displayTime(d.firstIn):'',clockOut:d.lastOut?displayTime(d.lastOut):'',workHours:d.workHours,closed:false}); return} workDays++; const hrs=d.workHours; const regular=Math.min(hrs,Number(shift.regularHours||8)); regularHours+=regular; let late=0; if(shift.start){const std=new Date(`${d.dateKey}T${shift.start}:00`); const actual=recTime(d.firstIn); if(actual>std) late=Math.round((actual-std)/60000)} lateMinutes+=late; dailyDetails.push({dateKey:d.dateKey,clockIn:displayTime(d.firstIn),clockOut:displayTime(d.lastOut),workHours:hrs,regularHours:regular,lateMinutes:late,closed:true})});
+  const approvedOtHours=ots.reduce((s,o)=>s+Number(o.hours||0),0); const hourly=Number(e.hourlyRate||0)||Number(e.dailyRate||0)/8||Number(e.monthlySalary||0)/30/8; let basePay=0; if(e.payType==='monthly') basePay=Number(e.monthlySalary||0); else if(e.payType==='daily') basePay=workDays*Number(e.dailyRate||0); else basePay=regularHours*Number(e.hourlyRate||0); if(e.payCycle==='biweekly'&&e.payType==='monthly') basePay=Number(e.monthlySalary||0)/2;
+  const otPay=approvedOtHours*hourly*Number(e.otMultiplier||1.5); const benefitLines=benefits.map(b=>({name:b.name||'',mode:b.mode,amount:Number(b.amount||0),total:b.mode==='perWorkday'?Number(b.amount||0)*workDays:Number(b.amount||0)})); const benefitsPay=benefitLines.reduce((s,b)=>s+b.total,0); const lateDeduction=lateMinutes*(hourly/60); const grossPay=basePay+otPay+benefitsPay; const netPay=grossPay-lateDeduction; const payCycle=e.payCycle||'monthly'; const payDate=payCycle==='biweekly'?computeBiweeklyPayDate(start,end):computeMonthlyPayDate(start,end); const hasClosedWork=daily.some(x=>x.lastOut);
+  return {employeeId:e.id,employeeCode:e.employeeCode,fullName:e.fullName,department:e.department||'',payType:e.payType||'hourly',payCycle,periodStart:start,periodEnd:end,payDate,workDays,regularHours,approvedOtHours,lateMinutes,hourlyRate:hourly,dailyRate:Number(e.dailyRate||0),monthlySalary:Number(e.monthlySalary||0),basePay,otPay,benefitsPay,benefitLines,lateDeduction,grossPay,netPay,dailyDetails,hasClosedWork};
+}
+function printSlipHtml(r,isUser=false){
+  const dailyRows=(r.dailyDetails||[]).map(d=>`<tr><td>${safeText(d.dateKey)}</td><td>${safeText(d.clockIn||'')}</td><td>${safeText(d.clockOut||'')}</td><td class="right">${Number(d.workHours||0).toFixed(2)}</td><td class="right">${Number(d.lateMinutes||0)}</td></tr>`).join('');
+  const benefitRows=(r.benefitLines||[]).map(b=>`<tr><td>${safeText(b.name)}</td><td>${b.mode==='perWorkday'?'ตามวันทำงาน':'Fix รายเดือน'}</td><td class="right">${money(b.total)}</td></tr>`).join('')||'<tr><td colspan="3">-</td></tr>';
+  const w=window.open('','_blank'); w.document.write(`<html><head><title>Payroll Slip</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:24px;color:#111827}h2,h3,p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:10px 0}td,th{border:1px solid #ddd;padding:8px;text-align:left}.right{text-align:right}.muted{color:#64748b}@media print{button{display:none}}</style></head><body><h2>Payroll Slip</h2><p>${safeText(companySettings.companyName||'')}</p><p class="muted">${isUser?'พนักงานพิมพ์เอง':'ออกโดยผู้ดูแลระบบ'}</p><table><tr><th>พนักงาน</th><td>${safeText(r.employeeCode)} ${safeText(r.fullName)}</td></tr><tr><th>งวด</th><td>${r.periodStart} ถึง ${r.periodEnd}</td></tr><tr><th>วันเงินออก</th><td>${r.payDate}</td></tr><tr><th>วิธีจ่าย</th><td>${payTypeText(r.payType)} / ${r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน'}</td></tr></table><h3>รายละเอียดเวลา</h3><table><tr><th>วันที่</th><th>เข้า</th><th>ออก</th><th>ชม.</th><th>สาย(นาที)</th></tr>${dailyRows}</table><h3>สรุปรายได้</h3><table><tr><th>ฐานเงิน</th><td class="right">${money(r.basePay)}</td></tr><tr><th>OT อนุมัติ ${r.approvedOtHours.toFixed(2)} ชม.</th><td class="right">${money(r.otPay)}</td></tr><tr><th>สวัสดิการ</th><td class="right">${money(r.benefitsPay)}</td></tr><tr><th>หักสาย</th><td class="right">${money(r.lateDeduction)}</td></tr><tr><th>สุทธิ</th><td class="right"><b>${money(r.netPay)}</b></td></tr></table><h3>สวัสดิการ</h3><table><tr><th>ชื่อ</th><th>วิธีคิด</th><th>ยอด</th></tr>${benefitRows}</table><button onclick="window.print()">พิมพ์</button><script>setTimeout(()=>window.print(),500)<\/script></body></html>`); w.document.close();
+}
+window.printSlip=function(employeeId){const r=lastPayrollRows.find(x=>x.employeeId===employeeId); if(!r)return; if(!canPrintSlip(r)){toast(slipDisabledReason(r),5000); return} printSlipHtml(r,false)}
+function exportAttendance(){
+  const rows=[]; lastAttendanceRows.forEach(r=>{rows.push({recordType:'DAILY_SUMMARY',date:r.dateKey,employeeCode:r.employeeCode,fullName:r.fullName,clockIn:r.firstIn?displayTime(r.firstIn):'',clockOut:r.lastOut?displayTime(r.lastOut):'',workHours:r.workHours.toFixed(2),inGeofence:r.inGeofence,distanceMeters:r.distanceMeters||'',mapUrl:r.mapUrl||'',photoMode:r.photoURL?'base64/firestore':'',recordCount:r.records.length}); r.records.forEach(x=>rows.push({recordType:'RAW',date:x.dateKey,employeeCode:x.employeeCode,fullName:x.fullName,type:x.type,time:displayTime(x),source:x.source||'',lat:x.latitude||'',lng:x.longitude||'',accuracy:x.accuracy||'',mapUrl:x.mapUrl||'',inGeofence:x.inGeofence,distanceMeters:x.distanceMeters||'',reason:x.reason||''}))}); exportCsv(`attendance-detailed-${todayKey()}.csv`,rows)
+}
+function exportPayroll(){exportCsv(`payroll-detailed-${todayKey()}.csv`,lastPayrollRows.map(r=>({employeeCode:r.employeeCode,fullName:r.fullName,department:r.department,payType:payTypeText(r.payType),payCycle:r.payCycle==='biweekly'?'ราย 14 วัน':'รายเดือน',periodStart:r.periodStart,periodEnd:r.periodEnd,payDate:r.payDate,workDays:r.workDays,regularHours:r.regularHours.toFixed(2),approvedOtHours:r.approvedOtHours.toFixed(2),lateMinutes:r.lateMinutes,hourlyRate:r.hourlyRate,dailyRate:r.dailyRate,monthlySalary:r.monthlySalary,basePay:r.basePay,otPay:r.otPay,benefitsPay:r.benefitsPay,lateDeduction:r.lateDeduction,grossPay:r.grossPay,netPay:r.netPay,printAllowed:canPrintSlip(r),printNote:slipDisabledReason(r)})))}
+function exportPayrollSlipCsv(){
+  const rows=[]; lastPayrollRows.forEach(r=>{rows.push({lineType:'SUMMARY',employeeCode:r.employeeCode,fullName:r.fullName,periodStart:r.periodStart,periodEnd:r.periodEnd,payDate:r.payDate,payType:payTypeText(r.payType),payCycle:r.payCycle,description:'NET_PAY',amount:r.netPay}); (r.dailyDetails||[]).forEach(d=>rows.push({lineType:'DAY',employeeCode:r.employeeCode,fullName:r.fullName,date:d.dateKey,clockIn:d.clockIn,clockOut:d.clockOut,workHours:d.workHours,lateMinutes:d.lateMinutes})); (r.benefitLines||[]).forEach(b=>rows.push({lineType:'BENEFIT',employeeCode:r.employeeCode,fullName:r.fullName,description:b.name,mode:b.mode,amount:b.total}))}); exportCsv(`payroll-slip-lines-${todayKey()}.csv`,rows)
+}
+function bind(){
+  const on=(id,fn)=>{if($(id)) $(id).onclick=fn};
+  on('loginBtn',login); on('seedAdminBtn',seedAdmin); on('logoutBtn1',logout); on('logoutBtn2',logout); on('startCameraBtn',startCamera); on('captureBtn',()=>captureSelfie().catch(e=>toast(e.message,5000))); on('clockInBtn',()=>clock('IN')); on('clockOutBtn',()=>clock('OUT')); on('autoClockBtn',autoClock); on('refreshMyHistoryBtn',loadMyHistory); on('refreshUserCalendarBtn',loadUserCalendar); on('refreshUserSlipBtn',loadUserSlipPreview); on('submitOtBtn',submitOt); on('submitLeaveBtn',submitLeave);
+  document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+  on('refreshTodayBtn',loadTodayAdmin); on('saveEmployeeBtn',saveEmployee); on('clearEmployeeBtn',clearEmployeeForm); on('loadAttendanceBtn',loadAttendance); on('saveCorrectionBtn',saveCorrection); on('exportAttendanceBtn',exportAttendance); on('saveShiftBtn',saveShift); on('clearShiftBtn',clearShift); on('loadOtBtn',loadOt); on('loadLeaveBtn',loadLeave); on('saveCalendarBtn',saveCalendar); on('loadCalendarBtn',loadCalendar); on('saveBenefitBtn',saveBenefit); on('runPayrollBtn',runPayroll); on('exportPayrollBtn',exportPayroll); on('exportPayrollSlipCsvBtn',exportPayrollSlipCsv); on('setCurrentPayPeriodBtn',setCurrentPayPeriod); on('useCurrentLocationBtn',()=>useCurrentLocation().catch(e=>toast(e.message,5000))); on('saveSettingsBtn',saveSettings); on('clearAttendanceBtn',()=>deleteCollection('attendance')); on('clearAuditBtn',()=>deleteCollection('auditLogs')); on('loadAuditBtn',loadAudit);
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('installBtn')?.classList.remove('hidden')}); on('installBtn',async()=>{if(deferredPrompt){deferredPrompt.prompt(); deferredPrompt=null; $('installBtn')?.classList.add('hidden')}})
+}
