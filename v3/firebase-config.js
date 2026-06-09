@@ -1,3 +1,4 @@
+// Firebase config ของโปรเจกต์คุณ
 window.firebaseConfig = {
   apiKey: "AIzaSyASVVewpHBNoCi-T7mpgwQFZMIDpRIS1xU",
   authDomain: "attendance-online-c5d7c.firebaseapp.com",
