@@ -8,7 +8,12 @@ export async function initFirebase() {
     throw new Error("ยังไม่ได้ตั้งค่า firebase-config.js");
   }
 
-  app = firebase.initializeApp(window.firebaseConfig);
+  if (!firebase.apps.length) {
+    app = firebase.initializeApp(window.firebaseConfig);
+  } else {
+    app = firebase.app();
+  }
+
   auth = firebase.auth();
   db = firebase.firestore();
 
