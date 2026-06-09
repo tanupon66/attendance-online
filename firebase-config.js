@@ -1,4 +1,3 @@
-// ใส่ค่า Firebase จริงของคุณที่นี่ก่อนใช้งาน
 window.firebaseConfig = {
   apiKey: "AIzaSyASVVewpHBNoCi-T7mpgwQFZMIDpRIS1xU",
   authDomain: "attendance-online-c5d7c.firebaseapp.com",

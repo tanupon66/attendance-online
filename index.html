@@ -2,210 +2,28 @@
 <html lang="th">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0f172a" />
-  <title>ระบบลงเวลาออนไลน์</title>
-  <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <div>
-      <h1>ระบบลงเวลาออนไลน์</h1>
-      <p id="companyName">พร้อมถ่ายรูป + GPS + เวลาเซิร์ฟเวอร์</p>
-    </div>
-    <button id="installBtn" class="ghost hidden">ติดตั้ง</button>
-  </header>
 
-  <main id="app">
-    <section id="setupPanel" class="card hidden">
-      <h2>ตั้งค่า Firebase ก่อนใช้งาน</h2>
-      <p>ยังไม่พบไฟล์ <b>firebase-config.js</b> หรือยังไม่ได้ใส่ค่า config ของ Firebase</p>
-      <ol>
-        <li>สร้าง Firebase Project</li>
-        <li>เปิด Firestore, Storage และ Authentication แบบ Anonymous</li>
-        <li>คัดลอกไฟล์ <b>firebase-config.example.js</b> เป็น <b>firebase-config.js</b></li>
-        <li>ใส่ค่า config แล้วอัปขึ้น GitHub</li>
-      </ol>
-    </section>
+  <meta name="application-name" content="Attendance Online">
+  <meta name="apple-mobile-web-app-title" content="Attendance">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="apple-touch-startup-image" href="./icons/splash-640x1136.png" media="(device-width: 320px) and (device-height: 568px)">
+  <link rel="apple-touch-startup-image" href="./icons/splash-750x1334.png" media="(device-width: 375px) and (device-height: 667px)">
+  <link rel="apple-touch-startup-image" href="./icons/splash-1125x2436.png" media="(device-width: 375px) and (device-height: 812px)">
 
-    <section id="loginPanel" class="card">
-      <h2>เข้าสู่ระบบ</h2>
-      <div class="grid two">
-        <label>รหัสพนักงาน
-          <input id="loginCode" autocomplete="username" placeholder="เช่น EMP001 หรือ admin" />
-        </label>
-        <label>PIN
-          <input id="loginPin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="รหัส PIN" />
-        </label>
-      </div>
-      <button id="loginBtn" class="primary full">เข้าสู่ระบบ</button>
-      <button id="seedAdminBtn" class="ghost full">สร้างแอดมินเริ่มต้น admin / admin123</button>
-      <p class="muted small">ควรเปลี่ยน PIN แอดมินทันทีหลังเข้าใช้งานครั้งแรก</p>
-    </section>
-
-    <section id="employeePanel" class="hidden">
-      <div class="card profile-card">
-        <div>
-          <h2 id="empName">พนักงาน</h2>
-          <p id="empDetail" class="muted"></p>
-        </div>
-        <button id="logoutBtn1" class="danger ghost">ออก</button>
-      </div>
-
-      <div class="card">
-        <h2>ลงเวลา</h2>
-        <p id="todayStatus" class="status-box">กำลังโหลดสถานะ...</p>
-        <div class="camera-wrap">
-          <video id="camera" playsinline autoplay muted></video>
-          <canvas id="snapshot" class="hidden"></canvas>
-        </div>
-        <div class="grid two">
-          <button id="startCameraBtn" class="ghost">เปิดกล้องหน้า</button>
-          <button id="captureBtn" class="ghost">ถ่ายรูป</button>
-        </div>
-        <img id="preview" class="preview hidden" alt="รูปที่ถ่าย" />
-        <p id="gpsStatus" class="muted small">ยังไม่ได้ดึงตำแหน่ง</p>
-        <div class="grid two">
-          <button id="clockInBtn" class="success">เข้างาน</button>
-          <button id="clockOutBtn" class="danger">ออกงาน</button>
-        </div>
-        <button id="autoClockBtn" class="primary full">ลงเวลาอัตโนมัติ</button>
-      </div>
-
-      <div class="card">
-        <h2>ประวัติของฉัน</h2>
-        <div id="myHistory" class="list"></div>
-      </div>
-    </section>
-
-    <section id="adminPanel" class="hidden">
-      <div class="card profile-card">
-        <div>
-          <h2>ผู้ดูแลระบบ</h2>
-          <p id="adminName" class="muted"></p>
-        </div>
-        <button id="logoutBtn2" class="danger ghost">ออก</button>
-      </div>
-
-      <nav class="tabs">
-        <button data-tab="today" class="active">วันนี้</button>
-        <button data-tab="employees">พนักงาน</button>
-        <button data-tab="attendance">รายการลงเวลา</button>
-        <button data-tab="payroll">เงินเดือน</button>
-        <button data-tab="holidays">วันหยุด</button>
-        <button data-tab="settings">ตั้งค่า</button>
-        <button data-tab="audit">Log</button>
-      </nav>
-
-      <div id="tabToday" class="tab card">
-        <h2>ภาพรวมวันนี้</h2>
-        <button id="refreshTodayBtn" class="ghost">รีเฟรช</button>
-        <div id="todayList" class="list"></div>
-      </div>
-
-      <div id="tabEmployees" class="tab card hidden">
-        <h2>จัดการพนักงาน</h2>
-        <details open>
-          <summary>เพิ่ม / แก้ไขพนักงาน</summary>
-          <div class="grid two">
-            <input id="empIdEdit" type="hidden" />
-            <label>รหัสพนักงาน* <input id="empCode" /></label>
-            <label>ชื่อ-นามสกุล* <input id="empFullName" /></label>
-            <label>แผนก <input id="empDept" /></label>
-            <label>ตำแหน่ง <input id="empPosition" /></label>
-            <label>PIN* <input id="empPin" type="password" placeholder="ใส่เมื่อต้องการตั้ง/เปลี่ยน" /></label>
-            <label>สิทธิ์
-              <select id="empRole"><option value="employee">พนักงาน</option><option value="admin">ผู้ดูแล</option></select>
-            </label>
-            <label>ค่าแรง/ชม. <input id="empHourly" type="number" step="0.01" value="0" /></label>
-            <label>ค่าแรงรายวัน <input id="empDaily" type="number" step="0.01" value="0" /></label>
-            <label>ตัวคูณ OT <input id="empOt" type="number" step="0.1" value="1.5" /></label>
-            <label>เวลาเข้างาน <input id="empStdStart" type="time" value="08:00" /></label>
-            <label>เวลาออกงาน <input id="empStdEnd" type="time" value="17:00" /></label>
-            <label class="check"><input id="empActive" type="checkbox" checked /> ใช้งาน</label>
-          </div>
-          <div class="grid two">
-            <button id="saveEmployeeBtn" class="success">บันทึกพนักงาน</button>
-            <button id="clearEmployeeBtn" class="ghost">ล้างฟอร์ม</button>
-          </div>
-        </details>
-        <div id="employeeList" class="list"></div>
-      </div>
-
-      <div id="tabAttendance" class="tab card hidden">
-        <h2>รายการลงเวลา</h2>
-        <div class="grid three">
-          <label>จากวันที่ <input id="attStart" type="date" /></label>
-          <label>ถึงวันที่ <input id="attEnd" type="date" /></label>
-          <button id="loadAttendanceBtn" class="ghost">ค้นหา</button>
-        </div>
-        <details>
-          <summary>เพิ่มรายการแก้ไขเวลาโดยผู้ดูแล</summary>
-          <div class="grid two">
-            <label>รหัสพนักงาน <input id="corrEmpCode" /></label>
-            <label>ประเภท <select id="corrType"><option value="IN">เข้างาน</option><option value="OUT">ออกงาน</option></select></label>
-            <label>วันที่ <input id="corrDate" type="date" /></label>
-            <label>เวลา <input id="corrTime" type="time" /></label>
-            <label class="wide">เหตุผล <input id="corrReason" /></label>
-          </div>
-          <button id="saveCorrectionBtn" class="warning full">บันทึกการแก้ไข</button>
-        </details>
-        <button id="exportAttendanceBtn" class="success">Export CSV</button>
-        <div id="attendanceList" class="list"></div>
-      </div>
-
-      <div id="tabPayroll" class="tab card hidden">
-        <h2>คำนวณเงินเดือน</h2>
-        <div class="grid three">
-          <label>จากวันที่ <input id="payStart" type="date" /></label>
-          <label>ถึงวันที่ <input id="payEnd" type="date" /></label>
-          <button id="runPayrollBtn" class="primary">คำนวณ</button>
-        </div>
-        <button id="exportPayrollBtn" class="success">Export CSV</button>
-        <div id="payrollList" class="list"></div>
-      </div>
-
-      <div id="tabHolidays" class="tab card hidden">
-        <h2>วันหยุด</h2>
-        <div class="grid three">
-          <label>วันที่ <input id="holidayDate" type="date" /></label>
-          <label>รายละเอียด <input id="holidayDesc" /></label>
-          <button id="addHolidayBtn" class="success">เพิ่มวันหยุด</button>
-        </div>
-        <div id="holidayList" class="list"></div>
-      </div>
-
-      <div id="tabSettings" class="tab card hidden">
-        <h2>ตั้งค่าบริษัท / พิกัด</h2>
-        <div class="grid two">
-          <label>ชื่อบริษัท <input id="setCompany" /></label>
-          <label>รัศมีอนุญาต (เมตร) <input id="setRadius" type="number" value="100" /></label>
-          <label>Latitude <input id="setLat" type="number" step="0.000001" /></label>
-          <label>Longitude <input id="setLng" type="number" step="0.000001" /></label>
-        </div>
-        <div class="grid two">
-          <button id="useCurrentLocationBtn" class="ghost">ใช้ตำแหน่งปัจจุบันเป็นที่ทำงาน</button>
-          <button id="saveSettingsBtn" class="success">บันทึกตั้งค่า</button>
-        </div>
-        <p class="muted small">ถ้าตั้งค่าพิกัด ระบบจะตรวจว่าพนักงานอยู่ในรัศมีที่กำหนดหรือไม่</p>
-      </div>
-
-      <div id="tabAudit" class="tab card hidden">
-        <h2>บันทึกการใช้งาน</h2>
-        <button id="loadAuditBtn" class="ghost">โหลด Log</button>
-        <div id="auditList" class="list"></div>
-      </div>
-    </section>
-  </main>
-
-  <div id="toast" class="toast hidden"></div>
-
+  <title>Attendance Online v3 Step 7 Full Pack</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles/main.css" />
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-storage-compat.js"></script>
-  <script src="firebase-config.js"></script>
-  <script src="app.js"></script>
+  <script src="./firebase-config.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./src/app.js"></script>
 </body>
 </html>
