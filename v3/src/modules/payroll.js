@@ -4,20 +4,21 @@ import { rebuildDailySummaryForEmployee } from "./summary.js";
 
 const SUMMARY_COLLECTION = "attendanceSummary";
 const OT_COLLECTION = "otRequests";
+const DEDUCTION_COLLECTION = "payrollDeductions";
 
 export async function renderPayrollModule(container, employee, mode = "admin") {
   container.innerHTML = `
     <div class="module-head">
       <div>
         <h2>Payroll & Slip</h2>
-        <p class="muted">คำนวณเงินเดือนจากสรุปรายวัน + OT ที่อนุมัติแล้ว</p>
+        <p class="muted">คำนวณเงินเดือนจากสรุปรายวัน + OT ที่อนุมัติแล้ว + รายการหักเงิน</p>
       </div>
     </div>
 
     <section class="card wide payroll-source-card">
       <h3>แหล่งข้อมูล Payroll</h3>
       <p class="muted small">
-        ระบบนี้ดึงข้อมูลจาก <b>attendanceSummary</b> สำหรับวันทำงาน/ชั่วโมง/มาสาย และดึง <b>otRequests</b> เฉพาะสถานะ <b>approved</b> มาคิดค่า OT เพิ่มเติม
+        ระบบนี้ดึงข้อมูลจาก <b>attendanceSummary</b> สำหรับวันทำงาน/ชั่วโมง/มาสาย, ดึง <b>otRequests</b> เฉพาะสถานะ <b>approved</b> มาคิดค่า OT และดึง <b>payrollDeductions</b> ที่ยัง active มาหักเงินเพิ่มเติม
       </p>
       <div class="filters">
         <input id="payStart" type="date" value="${todayKey()}">
@@ -30,6 +31,8 @@ export async function renderPayrollModule(container, employee, mode = "admin") {
       <p id="payrollMsg" class="message"></p>
       <div id="payrollList" class="list"></div>
     </section>
+
+    ${mode === "admin" ? adminDeductionPanel() : ""}
 
     <div id="slipModal" class="modal hidden">
       <div class="modal-backdrop" id="closeSlipBackdrop"></div>
@@ -50,7 +53,198 @@ export async function renderPayrollModule(container, employee, mode = "admin") {
   document.getElementById("closeSlipBtn").onclick = closeSlip;
   document.getElementById("closeSlipBackdrop").onclick = closeSlip;
 
+  if (mode === "admin") {
+    document.getElementById("saveDeductionBtn").onclick = () => saveManualDeduction(employee, mode);
+    document.getElementById("reloadDeductionBtn").onclick = () => loadDeductionList(employee, mode);
+    document.getElementById("payStart").addEventListener("change", () => loadDeductionList(employee, mode));
+    document.getElementById("payEnd").addEventListener("change", () => loadDeductionList(employee, mode));
+    await loadDeductionEmployees();
+    await loadDeductionList(employee, mode);
+  }
+
   await loadPayroll(employee, mode);
+}
+
+
+function adminDeductionPanel() {
+  return `
+    <section class="card wide payroll-deduction-card">
+      <div class="module-head compact-head">
+        <div>
+          <h3>รายการหักเงิน</h3>
+          <p class="muted small">เพิ่มรายการหักเงินรายพนักงาน เช่น ค่าปรับ เบิกเงินล่วงหน้า อุปกรณ์เสียหาย หรือเหตุผลอื่น ๆ ระบบจะนำไปหักใน Payroll ตามวันที่ของรายการ</p>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <label>พนักงาน
+          <select id="deductionEmployee"></select>
+        </label>
+        <label>วันที่หัก
+          <input id="deductionDate" type="date" value="${todayKey()}">
+        </label>
+        <label>จำนวนเงินที่หัก
+          <input id="deductionAmount" type="number" min="0" step="0.01" placeholder="เช่น 500">
+        </label>
+        <label>เหตุผลที่หัก
+          <input id="deductionReason" type="text" maxlength="160" placeholder="เช่น เบิกเงินล่วงหน้า / ค่าปรับมาสาย">
+        </label>
+      </div>
+      <div class="actions-row">
+        <button id="saveDeductionBtn" class="primary compact">บันทึกรายการหักเงิน</button>
+        <button id="reloadDeductionBtn" class="secondary compact">โหลดรายการหักเงิน</button>
+      </div>
+      <p id="deductionMsg" class="message"></p>
+      <div id="deductionList" class="list"></div>
+    </section>
+  `;
+}
+
+async function loadDeductionEmployees() {
+  const select = document.getElementById("deductionEmployee");
+  if (!select) return;
+  select.innerHTML = `<option value="">กำลังโหลดพนักงาน...</option>`;
+  const snap = await db.collection("employees").get();
+  const rows = snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(e => e.active !== false)
+    .sort((a, b) => String(a.employeeCode || a.fullName || "").localeCompare(String(b.employeeCode || b.fullName || "")));
+  select.innerHTML = rows.length
+    ? rows.map(e => `<option value="${safeText(e.id)}">${safeText(e.employeeCode || "")} ${safeText(e.fullName || e.id)}</option>`).join("")
+    : `<option value="">ยังไม่มีพนักงาน</option>`;
+}
+
+async function saveManualDeduction(employee, mode) {
+  if (mode !== "admin") return;
+  const msg = document.getElementById("deductionMsg");
+  const btn = document.getElementById("saveDeductionBtn");
+  const select = document.getElementById("deductionEmployee");
+  const employeeId = select.value;
+  const dateKey = document.getElementById("deductionDate").value;
+  const amount = Number(document.getElementById("deductionAmount").value || 0);
+  const reason = document.getElementById("deductionReason").value.trim();
+
+  if (!employeeId) { msg.textContent = "กรุณาเลือกพนักงาน"; return; }
+  if (!dateKey) { msg.textContent = "กรุณาเลือกวันที่หัก"; return; }
+  if (!amount || amount <= 0) { msg.textContent = "กรุณากรอกจำนวนเงินที่หักมากกว่า 0"; return; }
+  if (!reason) { msg.textContent = "กรุณากรอกเหตุผลที่หักเงิน"; return; }
+
+  btn.disabled = true;
+  msg.textContent = "กำลังบันทึกรายการหักเงิน...";
+  try {
+    const empDoc = await db.collection("employees").doc(employeeId).get();
+    const emp = empDoc.exists ? { id: empDoc.id, ...empDoc.data() } : { id: employeeId };
+    await db.collection(DEDUCTION_COLLECTION).add({
+      employeeId,
+      employeeCode: emp.employeeCode || "",
+      fullName: emp.fullName || "",
+      department: emp.department || "",
+      position: emp.position || "",
+      dateKey,
+      amount,
+      reason,
+      type: "manual",
+      active: true,
+      createdAt: new Date().toISOString(),
+      createdBy: employee?.id || "admin",
+      createdByName: employee?.fullName || employee?.employeeCode || "Admin"
+    });
+
+    await addPayrollAuditLog("CREATE_PAYROLL_DEDUCTION", {
+      employeeId,
+      dateKey,
+      amount,
+      reason,
+      actorId: employee?.id || "admin"
+    });
+
+    document.getElementById("deductionAmount").value = "";
+    document.getElementById("deductionReason").value = "";
+    msg.textContent = "บันทึกรายการหักเงินสำเร็จ และกำลังคำนวณ Payroll ใหม่";
+    await loadDeductionList(employee, mode);
+    await loadPayroll(employee, mode);
+  } catch (err) {
+    msg.textContent = "บันทึกไม่สำเร็จ: " + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadDeductionList(employee, mode) {
+  if (mode !== "admin") return;
+  const list = document.getElementById("deductionList");
+  const msg = document.getElementById("deductionMsg");
+  if (!list) return;
+  const start = document.getElementById("payStart").value;
+  const end = document.getElementById("payEnd").value;
+  if (!start || !end || start > end) {
+    list.innerHTML = `<div class="empty-state">เลือกช่วงวันที่ Payroll ให้ถูกต้องเพื่อดูรายการหักเงิน</div>`;
+    return;
+  }
+
+  list.innerHTML = `<div class="empty-state">กำลังโหลดรายการหักเงิน...</div>`;
+  try {
+    const snap = await db.collection(DEDUCTION_COLLECTION)
+      .where("dateKey", ">=", start)
+      .where("dateKey", "<=", end)
+      .get()
+      .catch(() => ({ docs: [] }));
+
+    const rows = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(r => r.active !== false)
+      .sort((a, b) => String(b.dateKey || "").localeCompare(String(a.dateKey || "")));
+
+    const total = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    if (msg) msg.textContent = rows.length ? `รายการหักเงินในงวดนี้ ${rows.length} รายการ รวม ${money(total)} บาท` : "ยังไม่มีรายการหักเงินในงวดนี้";
+
+    list.innerHTML = rows.length ? rows.map(r => `
+      <article class="summary-card deduction-item">
+        <h3>${safeText(r.employeeCode || "")} ${safeText(r.fullName || r.employeeId || "-")}</h3>
+        <p class="muted">วันที่ ${safeText(r.dateKey || "-")} • หัก ${money(r.amount)} บาท</p>
+        <p>${safeText(r.reason || "-")}</p>
+        <button class="danger compact" data-delete-deduction="${safeText(r.id)}">ลบ/ยกเลิกรายการนี้</button>
+      </article>
+    `).join("") : `<div class="empty-state">ยังไม่มีรายการหักเงินในงวดนี้</div>`;
+
+    list.querySelectorAll("[data-delete-deduction]").forEach(btn => {
+      btn.onclick = () => deleteManualDeduction(btn.dataset.deleteDeduction, employee, mode);
+    });
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state error-text">โหลดรายการหักเงินไม่สำเร็จ: ${safeText(err.message)}</div>`;
+  }
+}
+
+async function deleteManualDeduction(id, employee, mode) {
+  if (mode !== "admin" || !id) return;
+  if (!confirm("ต้องการลบ/ยกเลิกรายการหักเงินนี้ใช่หรือไม่?")) return;
+  const msg = document.getElementById("deductionMsg");
+  try {
+    await db.collection(DEDUCTION_COLLECTION).doc(id).update({
+      active: false,
+      deletedAt: new Date().toISOString(),
+      deletedBy: employee?.id || "admin"
+    });
+    await addPayrollAuditLog("DELETE_PAYROLL_DEDUCTION", { deductionId: id, actorId: employee?.id || "admin" });
+    if (msg) msg.textContent = "ยกเลิกรายการหักเงินแล้ว และคำนวณ Payroll ใหม่แล้ว";
+    await loadDeductionList(employee, mode);
+    await loadPayroll(employee, mode);
+  } catch (err) {
+    if (msg) msg.textContent = "ลบ/ยกเลิกรายการไม่สำเร็จ: " + err.message;
+  }
+}
+
+async function addPayrollAuditLog(action, payload = {}) {
+  try {
+    await db.collection("auditLogs").add({
+      action,
+      module: "payroll",
+      payload,
+      createdAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.warn("audit log skipped", err);
+  }
 }
 
 async function syncSummaryThenLoadPayroll(employee, mode) {
@@ -96,11 +290,12 @@ async function getPayrollRows(employee, mode) {
   const start = document.getElementById("payStart").value;
   const end = document.getElementById("payEnd").value;
 
-  const [sumSnap, empSnap, benefitSnap, otSnap] = await Promise.all([
+  const [sumSnap, empSnap, benefitSnap, otSnap, deductionSnap] = await Promise.all([
     db.collection(SUMMARY_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get(),
     db.collection("employees").get(),
     db.collection("benefits").get().catch(() => ({ docs: [] })),
-    db.collection(OT_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get().catch(() => ({ docs: [] }))
+    db.collection(OT_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get().catch(() => ({ docs: [] })),
+    db.collection(DEDUCTION_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get().catch(() => ({ docs: [] }))
   ]);
 
   const employees = {};
@@ -114,10 +309,14 @@ async function getPayrollRows(employee, mode) {
   let otRows = otSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(r => r.status === "approved");
+  let deductionRows = deductionSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(r => r.active !== false);
 
   if (mode !== "admin") {
     summaryRows = summaryRows.filter(r => r.employeeId === employee.id);
     otRows = otRows.filter(r => r.employeeId === employee.id);
+    deductionRows = deductionRows.filter(r => r.employeeId === employee.id);
   }
 
   const by = {};
@@ -149,6 +348,9 @@ async function getPayrollRows(employee, mode) {
       approvedOtHours: 0,
       approvedOtCount: 0,
       otDetails: [],
+      manualDeduct: 0,
+      deductionCount: 0,
+      deductionDetails: [],
       rawRows: []
     };
     return by[employeeId];
@@ -186,8 +388,22 @@ async function getPayrollRows(employee, mode) {
     });
   });
 
+  deductionRows.forEach(r => {
+    const o = ensureEmployeeRow(r.employeeId, r);
+    if (!o) return;
+    const amount = Number(r.amount || 0);
+    if (amount <= 0) return;
+    o.manualDeduct += amount;
+    o.deductionCount += 1;
+    o.deductionDetails.push({
+      dateKey: r.dateKey || "",
+      amount,
+      reason: r.reason || ""
+    });
+  });
+
   return Object.values(by)
-    .filter(o => o.rawRows.length || o.approvedOtCount)
+    .filter(o => o.rawRows.length || o.approvedOtCount || o.deductionCount)
     .map(o => calcPay(o, benefits, start, end));
 }
 
@@ -235,7 +451,8 @@ function calcPay(o, benefits, start, end) {
   const unpaidLeaveDeduct = o.payType === "monthly" ? o.unpaidLeave * (o.monthlySalary / 30) : 0;
 
   const grossPay = basePay + benefitPay + otPay;
-  const totalDeduct = lateDeduct + absentDeduct + unpaidLeaveDeduct;
+  const manualDeduct = Number(o.manualDeduct || 0);
+  const totalDeduct = lateDeduct + absentDeduct + unpaidLeaveDeduct + manualDeduct;
   const netPay = Math.max(0, grossPay - totalDeduct);
 
   return {
@@ -252,6 +469,7 @@ function calcPay(o, benefits, start, end) {
     lateDeduct,
     absentDeduct,
     unpaidLeaveDeduct,
+    manualDeduct,
     totalDeduct,
     netPay
   };
@@ -273,8 +491,9 @@ async function loadPayroll(employee, mode) {
     const rows = await getPayrollRows(employee, mode);
     const totalOtHours = rows.reduce((sum, r) => sum + Number(r.approvedOtHours || 0), 0);
     const totalOtPay = rows.reduce((sum, r) => sum + Number(r.otPay || 0), 0);
+    const totalManualDeduct = rows.reduce((sum, r) => sum + Number(r.manualDeduct || 0), 0);
     msg.textContent = rows.length
-      ? `พบข้อมูล ${rows.length} คน • OT อนุมัติแล้ว ${totalOtHours.toFixed(2)} ชม. • ค่า OT ${money(totalOtPay)} บาท`
+      ? `พบข้อมูล ${rows.length} คน • OT อนุมัติแล้ว ${totalOtHours.toFixed(2)} ชม. • ค่า OT ${money(totalOtPay)} บาท • หักเงินเพิ่ม ${money(totalManualDeduct)} บาท`
       : "ยังไม่มีข้อมูลในช่วงวันที่นี้";
     list.innerHTML = rows.length
       ? rows.map((r, i) => payrollCard(r, i)).join("")
@@ -304,7 +523,8 @@ function payrollCard(r, i) {
         <span class="badge good">OT ${Number(r.approvedOtHours || 0).toFixed(2)} ชม.</span>
         <span class="badge good">ค่า OT ${money(r.otPay)}</span>
         <span class="badge">รายได้ ${money(r.grossPay)}</span>
-        <span class="badge bad">หัก ${money(r.totalDeduct)}</span>
+        <span class="badge bad">หักเงินเพิ่ม ${money(r.manualDeduct || 0)}</span>
+        <span class="badge bad">หักรวม ${money(r.totalDeduct)}</span>
         <span class="badge good">สุทธิ ${money(r.netPay)} บาท</span>
       </div>
       <button id="slip-${i}" class="secondary compact">${canPrint ? "ดู/พิมพ์ Slip" : "ดู Slip รายเดือน"}</button>
@@ -317,6 +537,10 @@ function openSlip(r) {
   const otDetailHtml = r.otDetails.length
     ? `<div class="slip-ot-details"><b>รายละเอียด OT อนุมัติแล้ว</b><ul>${r.otDetails.map(o => `<li>${safeText(o.dateKey)} ${safeText(o.startTime)}-${safeText(o.endTime)} = ${Number(o.hours || 0).toFixed(2)} ชม. ${o.reason ? `• ${safeText(o.reason)}` : ""}</li>`).join("")}</ul></div>`
     : `<p class="muted">ไม่มี OT ที่อนุมัติในงวดนี้</p>`;
+
+  const deductionDetailHtml = r.deductionDetails.length
+    ? `<div class="slip-deduction-details"><b>รายละเอียดรายการหักเงิน</b><ul>${r.deductionDetails.map(d => `<li>${safeText(d.dateKey)} • หัก ${money(d.amount)} บาท • ${safeText(d.reason || "-")}</li>`).join("")}</ul></div>`
+    : `<p class="muted">ไม่มีรายการหักเงินเพิ่มเติมในงวดนี้</p>`;
 
   document.getElementById("slipBody").innerHTML = `
     <div class="print-slip">
@@ -346,10 +570,13 @@ function openSlip(r) {
         <tr><td>หักมาสาย</td><td>${money(r.lateDeduct)} บาท</td></tr>
         <tr><td>หักขาดงาน</td><td>${money(r.absentDeduct)} บาท</td></tr>
         <tr><td>หักลาไม่จ่ายเงิน</td><td>${money(r.unpaidLeaveDeduct)} บาท</td></tr>
+        <tr><td>หักเงินเพิ่มเติม</td><td>${money(r.manualDeduct || 0)} บาท</td></tr>
+        <tr><td>หักรวม</td><td>${money(r.totalDeduct)} บาท</td></tr>
         <tr><th>สุทธิ</th><th>${money(r.netPay)} บาท</th></tr>
       </table>
 
       ${otDetailHtml}
+      ${deductionDetailHtml}
       ${r.benefitDetails.length ? `<p class="muted">รายละเอียดเงินเพิ่ม: ${safeText(r.benefitDetails.join(", "))}</p>` : ""}
 
       <div class="signature-row">
@@ -399,6 +626,8 @@ async function exportPayroll(employee, mode) {
     lateDeduction: r.lateDeduct,
     absentDeduction: r.absentDeduct,
     unpaidLeaveDeduction: r.unpaidLeaveDeduct,
+    manualDeductionCount: r.deductionCount,
+    manualDeduction: r.manualDeduct,
     totalDeduction: r.totalDeduct,
     netPay: r.netPay
   })));
@@ -413,6 +642,7 @@ async function exportSlipCsv(employee, mode) {
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักมาสาย", amount: -r.lateDeduct },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักขาดงาน", amount: -r.absentDeduct },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักลาไม่จ่ายเงิน", amount: -r.unpaidLeaveDeduct },
+    { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักเงินเพิ่มเติม", amount: -r.manualDeduct, detail: (r.deductionDetails || []).map(d => `${d.dateKey}: ${d.reason} ${d.amount}`).join(" | ") },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "สุทธิ", amount: r.netPay }
   ])));
 }

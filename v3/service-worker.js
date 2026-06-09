@@ -1,5 +1,5 @@
 
-const APP_VERSION = "3.2.5-payroll-ot-fix";
+const APP_VERSION = "3.2.6-payroll-deduction";
 const CACHE_NAME = `attendance-v${APP_VERSION}`;
 const RUNTIME_CACHE = `attendance-runtime-v${APP_VERSION}`;
 
