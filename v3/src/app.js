@@ -1,6 +1,7 @@
 import { initFirebase, db } from "./core/firebase.js";
 import { safeText, todayKey, nowText, sha256, setSession, getSession, clearSession } from "./core/utils.js";
 import { t, bindLangSelector } from "./core/i18n.js";
+import { initPwa } from "./core/pwa.js";
 import { renderLoading, shell } from "./UI/shell.js";
 import { renderDashboardModule } from "./modules/dashboard.js";
 import { renderEmployeesModule } from "./modules/employees.js";
@@ -13,7 +14,7 @@ import { renderNotificationsModule } from "./modules/notifications.js";
 import { renderProfileModule } from "./modules/profile.js";
 
 const appEl=document.getElementById("app");
-let currentRoute="dashboard";
+let currentRoute = new URLSearchParams(location.search).get("route") || "dashboard";
 
 function renderLogin(message=""){
   appEl.innerHTML=`<main class="screen login-screen"><section class="login-card"><div class="brand-row"><div class="logo">A3</div><div><h1>${t("appName")}</h1><p class="muted">Step 7 Full Pack</p></div></div><label>${t("employeeCode")}</label><input id="loginCode" autocomplete="username" placeholder="admin หรือ 001"><label>${t("pin")}</label><input id="loginPin" type="password" autocomplete="current-password" placeholder="PIN"><button id="loginBtn" class="primary">${t("login")}</button><button id="seedAdminBtn" class="secondary">สร้างแอดมินเริ่มต้น</button><p id="loginMsg" class="message">${safeText(message)}</p></section></main>`;
@@ -36,6 +37,7 @@ async function restoreSession(){
   try{const doc=await db.collection("employees").doc(cached.id).get();if(!doc.exists){clearSession();renderLogin();return}const emp={id:doc.id,...doc.data()};if(emp.active===false){clearSession();renderLogin("บัญชีถูกปิด");return}setSession(emp);renderApp(emp,currentRoute||"dashboard")}catch(err){clearSession();renderLogin("โหลดบัญชีไม่สำเร็จ กรุณาเข้าสู่ระบบใหม่")}
 }
 function bindShell(emp){
+  initPwa(emp);
   document.getElementById("logoutBtn").onclick=logout;
   document.querySelectorAll("[data-route]").forEach(btn=>btn.onclick=()=>renderApp(emp,btn.dataset.route));
   bindLangSelector(()=>renderApp(emp,currentRoute));

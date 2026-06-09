@@ -21,7 +21,7 @@ export async function renderNotificationsModule(container, employee, mode="emplo
       <div class="actions-row">
         <button id="markAllReadBtn" class="secondary compact">อ่านทั้งหมด</button>
         <button id="deleteReadBtn" class="danger compact">ลบที่อ่านแล้ว</button>
-        <button id="reloadNotiBtn" class="secondary compact">โหลดใหม่</button>
+        <button id="reloadNotiBtn" class="secondary compact">โหลดใหม่</button><button id="enablePushBtn" class="primary compact">เปิดแจ้งเตือนบนเครื่องนี้</button>
       </div>
       <div id="notiList" class="list"></div>
     </section>
@@ -32,7 +32,7 @@ export async function renderNotificationsModule(container, employee, mode="emplo
   }
   document.getElementById("markAllReadBtn").onclick=()=>markAllRead(employee,mode);
   document.getElementById("deleteReadBtn").onclick=()=>deleteRead(employee,mode);
-  document.getElementById("reloadNotiBtn").onclick=()=>loadNotifications(employee,mode);
+  document.getElementById("reloadNotiBtn").onclick=()=>loadNotifications(employee,mode); const pushBtn=document.getElementById("enablePushBtn"); if(pushBtn) pushBtn.onclick=()=>window.requestAttendancePush?.();
   await loadNotifications(employee,mode);
 }
 
