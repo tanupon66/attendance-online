@@ -7,18 +7,11 @@ export async function initFirebase() {
   if (!window.firebaseConfig || !window.firebaseConfig.apiKey) {
     throw new Error("ยังไม่ได้ตั้งค่า firebase-config.js");
   }
-
-  if (!firebase.apps.length) {
-    app = firebase.initializeApp(window.firebaseConfig);
-  } else {
-    app = firebase.app();
-  }
-
+  if (!firebase.apps.length) app = firebase.initializeApp(window.firebaseConfig);
+  else app = firebase.app();
   auth = firebase.auth();
   db = firebase.firestore();
-
   await auth.signInAnonymously();
   currentFirebaseUser = auth.currentUser;
-
   return { app, auth, db, currentFirebaseUser };
 }
