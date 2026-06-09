@@ -11,7 +11,11 @@ const defaultSettings = {
   officeLng: "",
   radiusMeters: 100,
   defaultRequireGeofence: false,
-  allowOutsidePendingApproval: true
+  allowOutsidePendingApproval: true,
+  monthlyPaydayEnabled: false,
+  monthlyPaydayDay: 30,
+  monthlyPaydayNotifyDaysBefore: 1,
+  monthlyPaydayTitle: "วันจ่ายเงินพนักงานรายเดือน"
 };
 
 let currentSettings = { ...defaultSettings };
@@ -27,7 +31,7 @@ export async function renderGeofenceSettingsModule(container, admin) {
 function ui() {
   return `
     <div class="module-head">
-      <div><h2>ตำแหน่งบริษัท / ขอบเขตรัศมี</h2><p class="muted">กำหนดจุดลงเวลาและเลือกพนักงานที่ต้องอยู่ในรัศมี</p></div>
+      <div><h2>ตำแหน่งบริษัท / ขอบเขตรัศมี / วันจ่ายเงิน</h2><p class="muted">กำหนดจุดลงเวลา เลือกพนักงานที่ต้องอยู่ในรัศมี และตั้งวันจ่ายเงินพนักงานรายเดือน</p></div>
       <button id="reloadGeoBtn" class="secondary compact">โหลดใหม่</button>
     </div>
 
@@ -52,6 +56,27 @@ function ui() {
       <div id="geoPreview" class="geo-preview"></div>
     </section>
 
+    <section class="card wide payday-settings-card">
+      <div class="section-title">
+        <div>
+          <h3>วันจ่ายเงินพนักงานรายเดือน</h3>
+          <p class="muted">ใช้สำหรับแสดงในปฏิทินและแจ้งเตือนบนโทรศัพท์ ถ้าวันจ่ายเงินตรงกับวันทำงาน วันนั้นยังเป็นวันทำงานปกติ</p>
+        </div>
+      </div>
+      <div class="form-grid tools-form">
+        <label>เปิดใช้วันจ่ายเงิน</label><label class="check"><input id="monthlyPaydayEnabled" type="checkbox"> เปิดแจ้งเตือนวันจ่ายเงินรายเดือน</label>
+        <label>จ่ายทุกวันที่</label><input id="monthlyPaydayDay" type="number" min="1" max="31" step="1" placeholder="เช่น 30">
+        <label>หัวข้อในปฏิทิน</label><input id="monthlyPaydayTitle" maxlength="80" placeholder="วันจ่ายเงินพนักงานรายเดือน">
+        <label>แจ้งเตือนล่วงหน้า</label><input id="monthlyPaydayNotifyDaysBefore" type="number" min="0" max="7" step="1" placeholder="เช่น 1">
+      </div>
+      <div class="actions-row">
+        <button id="savePaydaySettingsBtn" class="primary">บันทึกวันจ่ายเงิน</button>
+        <button id="testPaydayNotiBtn" class="secondary compact">ทดสอบแจ้งเตือนบนเครื่องนี้</button>
+      </div>
+      <p id="paydaySettingsMsg" class="message"></p>
+      <div id="paydayPreview" class="geo-preview"></div>
+    </section>
+
     <section class="card wide">
       <div class="section-title">
         <div><h3>กำหนดรายพนักงาน</h3><p class="muted">เปิด/ปิดว่าพนักงานแต่ละคนต้อง clock in/out ในรัศมีหรือไม่</p></div>
@@ -68,7 +93,14 @@ function bind(admin) {
   document.getElementById("geoEmployeeSearch").oninput = loadEmployeeGeofenceList;
   document.getElementById("saveGeoSettingsBtn").onclick = () => saveSettings(admin).catch(err => setMsg("geoSettingsMsg", "ผิดพลาด: " + err.message));
   document.getElementById("useCurrentLocationBtn").onclick = () => useCurrentLocation().catch(err => setMsg("geoSettingsMsg", "ดึงตำแหน่งไม่ได้: " + err.message));
+  document.getElementById("savePaydaySettingsBtn").onclick = () => savePaydaySettings(admin).catch(err => setMsg("paydaySettingsMsg", "ผิดพลาด: " + err.message));
+  document.getElementById("testPaydayNotiBtn").onclick = testPaydayNotification;
   ["officeLat", "officeLng", "radiusMeters", "officeName"].forEach(id => document.getElementById(id).oninput = updatePreview);
+  ["monthlyPaydayEnabled", "monthlyPaydayDay", "monthlyPaydayTitle", "monthlyPaydayNotifyDaysBefore"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.oninput = updatePaydayPreview;
+    if (el) el.onchange = updatePaydayPreview;
+  });
 }
 
 async function loadSettings() {
@@ -83,7 +115,12 @@ function fillSettingsForm() {
   setVal("radiusMeters", Number(currentSettings.radiusMeters || 100));
   document.getElementById("defaultRequireGeofence").checked = currentSettings.defaultRequireGeofence === true;
   document.getElementById("allowOutsidePendingApproval").checked = currentSettings.allowOutsidePendingApproval !== false;
+  document.getElementById("monthlyPaydayEnabled").checked = currentSettings.monthlyPaydayEnabled === true;
+  setVal("monthlyPaydayDay", Number(currentSettings.monthlyPaydayDay || 30));
+  setVal("monthlyPaydayTitle", currentSettings.monthlyPaydayTitle || "วันจ่ายเงินพนักงานรายเดือน");
+  setVal("monthlyPaydayNotifyDaysBefore", Number(currentSettings.monthlyPaydayNotifyDaysBefore ?? 1));
   updatePreview();
+  updatePaydayPreview();
 }
 
 async function saveSettings(admin) {
@@ -127,6 +164,54 @@ async function useCurrentLocation() {
   setVal("officeLng", pos.coords.longitude.toFixed(6));
   setMsg("geoSettingsMsg", `ดึงตำแหน่งแล้ว ±${Math.round(pos.coords.accuracy)}m กรุณากดบันทึก`);
   updatePreview();
+}
+
+
+async function savePaydaySettings(admin) {
+  const day = Number(val("monthlyPaydayDay"));
+  const notifyDays = Number(val("monthlyPaydayNotifyDaysBefore"));
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error("วันที่จ่ายเงินต้องอยู่ระหว่าง 1-31");
+  if (!Number.isInteger(notifyDays) || notifyDays < 0 || notifyDays > 7) throw new Error("แจ้งเตือนล่วงหน้าได้ 0-7 วัน");
+  const data = {
+    monthlyPaydayEnabled: document.getElementById("monthlyPaydayEnabled").checked,
+    monthlyPaydayDay: day,
+    monthlyPaydayTitle: val("monthlyPaydayTitle") || "วันจ่ายเงินพนักงานรายเดือน",
+    monthlyPaydayNotifyDaysBefore: notifyDays,
+    paydayUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    paydayUpdatedBy: admin.employeeCode || admin.id || "admin"
+  };
+  await db.collection(SETTINGS_COLLECTION).doc(COMPANY_DOC).set(data, { merge: true });
+  currentSettings = { ...currentSettings, ...data };
+  await writeLog("MONTHLY_PAYDAY_SETTINGS_UPDATE", admin, data);
+  setMsg("paydaySettingsMsg", "บันทึกวันจ่ายเงินแล้ว ปฏิทินจะอัปเดตตามเดือนที่เลือก");
+  updatePaydayPreview();
+}
+
+function updatePaydayPreview() {
+  const preview = document.getElementById("paydayPreview");
+  if (!preview) return;
+  const enabled = document.getElementById("monthlyPaydayEnabled")?.checked;
+  const day = Number(val("monthlyPaydayDay") || 30);
+  const title = val("monthlyPaydayTitle") || "วันจ่ายเงินพนักงานรายเดือน";
+  const notifyDays = Number(val("monthlyPaydayNotifyDaysBefore") || 0);
+  const now = new Date();
+  const payDate = computePaydayDate(now.getFullYear(), now.getMonth(), day);
+  const dateText = `${payDate.getFullYear()}-${String(payDate.getMonth()+1).padStart(2,"0")}-${String(payDate.getDate()).padStart(2,"0")}`;
+  preview.innerHTML = `<div class="detail-row payday-preview-box"><b>${safeText(enabled ? title : "ยังไม่เปิดใช้วันจ่ายเงิน")}</b><br>เดือนนี้จะแสดงในปฏิทินวันที่: ${safeText(dateText)}<br>แจ้งเตือนล่วงหน้า: ${safeText(notifyDays)} วัน<br><span class="muted">หมายเหตุ: ถ้าตรงกับวันทำงาน ระบบจะยังนับเป็นวันทำงานปกติ แต่เพิ่มป้าย/แจ้งเตือนวันจ่ายเงินเท่านั้น</span></div>`;
+}
+
+function computePaydayDate(year, monthIndex, paydayDay) {
+  const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+  return new Date(year, monthIndex, Math.min(Math.max(1, Number(paydayDay || 30)), lastDay));
+}
+
+async function testPaydayNotification() {
+  if (!("Notification" in window)) return setMsg("paydaySettingsMsg", "เครื่องนี้ไม่รองรับ Notification");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") return setMsg("paydaySettingsMsg", "ยังไม่ได้อนุญาตแจ้งเตือนบนเครื่องนี้");
+  const title = val("monthlyPaydayTitle") || "วันจ่ายเงินพนักงานรายเดือน";
+  new Notification(title, { body: "ทดสอบแจ้งเตือนวันจ่ายเงินจาก Attendance Online", icon: "./icons/icon-192.png" });
+  setMsg("paydaySettingsMsg", "ส่งแจ้งเตือนทดสอบแล้ว ถ้าไม่เห็นให้ตรวจสิทธิ์แจ้งเตือนของเบราว์เซอร์/แอป");
 }
 
 async function loadEmployeeGeofenceList() {

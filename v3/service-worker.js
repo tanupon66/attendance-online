@@ -1,5 +1,5 @@
 
-const APP_VERSION = "3.2.6-payroll-deduction";
+const APP_VERSION = "3.2.7-payday-calendar-notification";
 const CACHE_NAME = `attendance-v${APP_VERSION}`;
 const RUNTIME_CACHE = `attendance-runtime-v${APP_VERSION}`;
 

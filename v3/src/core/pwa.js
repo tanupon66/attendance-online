@@ -10,6 +10,7 @@ export function initPwa(currentEmployee = null) {
   setupAutoUpdateNotice();
   setupBackgroundSync();
   exposePushPermission(currentEmployee);
+  setupPaydayReminder(currentEmployee);
 }
 
 async function registerServiceWorker() {
@@ -165,4 +166,78 @@ function exposePushPermission(currentEmployee) {
       }).catch(console.warn);
     }
   };
+}
+
+
+async function setupPaydayReminder(currentEmployee) {
+  if (!currentEmployee?.id) return;
+  // แจ้งเฉพาะพนักงานรายเดือนและแอดมินที่เปิดระบบไว้ เพื่อไม่ให้รบกวนพนักงานรายวัน/รายชั่วโมง
+  const payType = currentEmployee.payType || "";
+  if (currentEmployee.role !== "admin" && payType !== "monthly") return;
+
+  try {
+    const doc = await db.collection("settings").doc("company").get();
+    if (!doc.exists) return;
+    const settings = doc.data() || {};
+    if (settings.monthlyPaydayEnabled !== true) return;
+
+    const now = new Date();
+    const payday = computePaydayDate(now.getFullYear(), now.getMonth(), Number(settings.monthlyPaydayDay || 30));
+    const daysBefore = Math.min(Math.max(Number(settings.monthlyPaydayNotifyDaysBefore ?? 1), 0), 7);
+    const start = new Date(payday);
+    start.setDate(start.getDate() - daysBefore);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(payday);
+    end.setHours(23, 59, 59, 999);
+    if (now < start || now > end) return;
+
+    const dateKey = toDateKey(payday);
+    const today = toDateKey(now);
+    const storageKey = `attendance_payday_noti_${currentEmployee.id}_${dateKey}_${today}`;
+    if (localStorage.getItem(storageKey) === "1") return;
+
+    const title = settings.monthlyPaydayTitle || "วันจ่ายเงินพนักงานรายเดือน";
+    const body = today === dateKey
+      ? `วันนี้เป็น${title}`
+      : `${title} วันที่ ${dateKey}`;
+
+    await db.collection("notifications").add({
+      employeeId: currentEmployee.id,
+      employeeCode: currentEmployee.employeeCode || "",
+      title,
+      message: body,
+      type: "monthly_payday",
+      read: false,
+      dateKey: today,
+      paydayDateKey: dateKey,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(console.warn);
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      const reg = await navigator.serviceWorker?.ready.catch(() => null);
+      if (reg?.showNotification) {
+        await reg.showNotification(title, {
+          body,
+          icon: "./icons/icon-192.png",
+          badge: "./icons/icon-72.png",
+          vibrate: [100, 50, 100],
+          data: { url: "./?route=notifications" }
+        });
+      } else {
+        new Notification(title, { body, icon: "./icons/icon-192.png" });
+      }
+    }
+    localStorage.setItem(storageKey, "1");
+  } catch (err) {
+    console.warn("payday reminder skipped", err);
+  }
+}
+
+function computePaydayDate(year, monthIndex, paydayDay) {
+  const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+  return new Date(year, monthIndex, Math.min(Math.max(1, Number(paydayDay || 30)), lastDay));
+}
+
+function toDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
