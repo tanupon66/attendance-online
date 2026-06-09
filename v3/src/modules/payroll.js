@@ -1,71 +1,26 @@
 import { db } from "../core/firebase.js";
-import { safeText, todayKey, exportCsv } from "../core/utils.js";
+import { safeText, todayKey, exportCsv, money } from "../core/utils.js";
 
-export async function renderPayrollModule(container) {
-  container.innerHTML = `
-    <div class="module-head">
-      <div>
-        <h2>Payroll</h2>
-        <p class="muted">Step 6 วางโครง Payroll Slip + CSV ก่อน Step 7 จะทำ Payroll Engine เต็ม</p>
-      </div>
-    </div>
-
-    <section class="card wide">
-      <div class="filters">
-        <input id="payStart" type="date" value="${todayKey()}">
-        <input id="payEnd" type="date" value="${todayKey()}">
-        <button id="loadPayrollBaseBtn" class="primary compact">โหลดข้อมูลสรุป</button>
-        <button id="exportPayrollBaseCsvBtn" class="secondary compact">Export Payroll CSV</button>
-      </div>
-      <p class="muted">ตอนนี้ดึงจาก attendanceSummary เพื่อเตรียมเป็นฐานคำนวณเงินเดือนและ Slip</p>
-      <div id="payrollBaseList" class="list"></div>
-    </section>
-  `;
-  document.getElementById("loadPayrollBaseBtn").onclick = loadBase;
-  document.getElementById("exportPayrollBaseCsvBtn").onclick = exportBase;
-  await loadBase();
+export async function renderPayrollModule(container, employee, mode="admin"){
+  container.innerHTML=`<div class="module-head"><div><h2>Payroll & Slip</h2><p class="muted">คำนวณจาก attendanceSummary พร้อม Export CSV และพิมพ์ Slip</p></div></div><section class="card wide"><div class="filters"><input id="payStart" type="date" value="${todayKey()}"><input id="payEnd" type="date" value="${todayKey()}"><button id="loadPayrollBtn" class="primary compact">คำนวณ</button><button id="exportPayrollCsvBtn" class="secondary compact">Export Payroll CSV</button></div><div id="payrollList" class="list"></div></section><div id="slipModal" class="modal hidden"><div class="modal-backdrop" id="closeSlipBackdrop"></div><div class="modal-card slip-card"><div class="modal-head"><h2>Payroll Slip</h2><button id="closeSlipBtn" class="secondary compact">ปิด</button></div><div id="slipBody"></div></div></div>`;
+  document.getElementById("loadPayrollBtn").onclick=()=>loadPayroll(employee,mode);
+  document.getElementById("exportPayrollCsvBtn").onclick=()=>exportPayroll(employee,mode);
+  document.getElementById("closeSlipBtn").onclick=closeSlip;document.getElementById("closeSlipBackdrop").onclick=closeSlip;
+  await loadPayroll(employee,mode);
 }
-
-async function getRows() {
-  const start = document.getElementById("payStart").value;
-  const end = document.getElementById("payEnd").value;
-  const snap = await db.collection("attendanceSummary").where("dateKey", ">=", start).where("dateKey", "<=", end).get();
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+async function getPayrollRows(employee,mode){
+  const start=document.getElementById("payStart").value,end=document.getElementById("payEnd").value;
+  const [sumSnap, empSnap] = await Promise.all([db.collection("attendanceSummary").where("dateKey",">=",start).where("dateKey","<=",end).get(), db.collection("employees").get()]);
+  const employees={};empSnap.docs.forEach(d=>employees[d.id]={id:d.id,...d.data()});
+  let rows=sumSnap.docs.map(d=>({id:d.id,...d.data()}));
+  if(mode!=="admin") rows=rows.filter(r=>r.employeeId===employee.id);
+  const by={};
+  rows.forEach(r=>{const e=employees[r.employeeId]||{};const k=r.employeeId;by[k] ||= {employeeId:k,employeeCode:r.employeeCode,fullName:r.fullName,department:r.department,payType:e.payType||"daily",dailyRate:Number(e.dailyRate||0),hourlyRate:Number(e.hourlyRate||0),monthlySalary:Number(e.monthlySalary||0),workDays:0,paidLeave:0,unpaidLeave:0,absentDays:0,lateMinutes:0,netHours:0,regularHours:0,rows:[]}; const o=by[k]; o.rows.push(r); if(["PRESENT","LATE"].includes(r.status))o.workDays++; if(r.status==="LEAVE_PAID")o.paidLeave++; if(r.status==="LEAVE_UNPAID")o.unpaidLeave++; if(r.status==="ABSENT")o.absentDays++; o.lateMinutes+=Number(r.lateMinutes||0); o.netHours+=Number(r.netHours||0); o.regularHours+=Number(r.regularHours||0);});
+  return Object.values(by).map(calcPay);
 }
-
-async function loadBase() {
-  const list = document.getElementById("payrollBaseList");
-  list.innerHTML = `<div class="empty-state">กำลังโหลด...</div>`;
-  try {
-    const rows = await getRows();
-    const byEmp = {};
-    rows.forEach(r => {
-      const k = r.employeeId;
-      byEmp[k] ||= { employeeCode: r.employeeCode, fullName: r.fullName, workDays: 0, absentDays: 0, lateMinutes: 0, netHours: 0 };
-      if (["PRESENT","LATE"].includes(r.status)) byEmp[k].workDays++;
-      if (r.status === "ABSENT") byEmp[k].absentDays++;
-      byEmp[k].lateMinutes += Number(r.lateMinutes || 0);
-      byEmp[k].netHours += Number(r.netHours || 0);
-    });
-    const out = Object.values(byEmp);
-    list.innerHTML = out.length ? out.map(r => `<article class="summary-card"><h3>${safeText(r.employeeCode)} ${safeText(r.fullName)}</h3><div class="badges"><span class="badge">วันทำงาน ${r.workDays}</span><span class="badge bad">ขาด ${r.absentDays}</span><span class="badge warn">สาย ${r.lateMinutes} นาที</span><span class="badge">ชม. ${r.netHours.toFixed(2)}</span></div><button class="secondary compact" onclick="window.print()">พิมพ์ Slip ตัวอย่าง</button></article>`).join("") : `<div class="empty-state">ยังไม่มีข้อมูล summary</div>`;
-  } catch (err) {
-    list.innerHTML = `<div class="empty-state error-text">${safeText(err.message)}</div>`;
-  }
-}
-
-async function exportBase() {
-  const rows = await getRows();
-  exportCsv("payroll-base.csv", rows.map(r => ({
-    dateKey: r.dateKey,
-    employeeCode: r.employeeCode,
-    fullName: r.fullName,
-    status: r.status,
-    statusLabel: r.statusLabel,
-    netHours: r.netHours,
-    regularHours: r.regularHours,
-    lateMinutes: r.lateMinutes,
-    calendarType: r.calendarType,
-    leaveType: r.leaveType
-  })));
-}
+function calcPay(o){const hourly=o.hourlyRate || (o.dailyRate?o.dailyRate/8:0); let base=0;if(o.payType==="monthly")base=o.monthlySalary;else if(o.payType==="hourly")base=o.regularHours*hourly;else base=(o.workDays+o.paidLeave)*o.dailyRate; const lateDeduct=o.lateMinutes*(hourly/60); const absentDeduct=o.payType==="monthly"?o.absentDays*(o.monthlySalary/30):0; const gross=base; const net=Math.max(0,gross-lateDeduct-absentDeduct); return {...o,hourly,base,gross,lateDeduct,absentDeduct,net};}
+async function loadPayroll(employee,mode){const list=document.getElementById("payrollList");list.innerHTML=`<div class="empty-state">กำลังคำนวณ...</div>`;try{const rows=await getPayrollRows(employee,mode);list.innerHTML=rows.length?rows.map(card).join(""):`<div class="empty-state">ยังไม่มีข้อมูล summary</div>`;rows.forEach((r,i)=>document.getElementById(`slip-${i}`).onclick=()=>openSlip(r));}catch(err){list.innerHTML=`<div class="empty-state error-text">${safeText(err.message)}</div>`}}
+function card(r){const i=Math.random().toString(36).slice(2); r._id=i; return `<article class="summary-card"><h3>${safeText(r.employeeCode)} ${safeText(r.fullName)}</h3><div class="badges"><span class="badge">ประเภท ${safeText(r.payType)}</span><span class="badge">ทำงาน ${r.workDays}</span><span class="badge info">ลาจ่าย ${r.paidLeave}</span><span class="badge bad">ขาด ${r.absentDays}</span><span class="badge warn">สาย ${r.lateMinutes} นาที</span><span class="badge good">สุทธิ ${money(r.net)} บาท</span></div><button id="slip-${i}" class="secondary compact">ดู/พิมพ์ Slip</button></article>`}
+function openSlip(r){document.getElementById("slipBody").innerHTML=`<div class="print-slip"><h2>Payroll Slip</h2><p>${safeText(r.employeeCode)} • ${safeText(r.fullName)}</p><table><tr><td>ประเภท</td><td>${safeText(r.payType)}</td></tr><tr><td>วันทำงาน</td><td>${r.workDays}</td></tr><tr><td>ลาจ่ายเงิน</td><td>${r.paidLeave}</td></tr><tr><td>ลาไม่จ่ายเงิน</td><td>${r.unpaidLeave}</td></tr><tr><td>ขาดงาน</td><td>${r.absentDays}</td></tr><tr><td>ชั่วโมงสุทธิ</td><td>${r.netHours.toFixed(2)}</td></tr><tr><td>มาสาย</td><td>${r.lateMinutes} นาที</td></tr><tr><td>รายได้ฐาน</td><td>${money(r.base)}</td></tr><tr><td>หักสาย</td><td>${money(r.lateDeduct)}</td></tr><tr><td>หักขาดงาน</td><td>${money(r.absentDeduct)}</td></tr><tr><th>สุทธิ</th><th>${money(r.net)} บาท</th></tr></table><button onclick="window.print()" class="primary">พิมพ์</button></div>`;document.getElementById("slipModal").classList.remove("hidden")}
+function closeSlip(){document.getElementById("slipModal").classList.add("hidden")}
+async function exportPayroll(employee,mode){const rows=await getPayrollRows(employee,mode);exportCsv("payroll-step7.csv",rows.map(r=>({employeeCode:r.employeeCode,fullName:r.fullName,department:r.department,payType:r.payType,workDays:r.workDays,paidLeave:r.paidLeave,unpaidLeave:r.unpaidLeave,absentDays:r.absentDays,lateMinutes:r.lateMinutes,netHours:r.netHours,basePay:r.base,lateDeduction:r.lateDeduct,absentDeduction:r.absentDeduct,netPay:r.net})))}
