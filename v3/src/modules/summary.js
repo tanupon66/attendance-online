@@ -29,13 +29,90 @@ export async function renderSummaryModule(container, currentEmployee, mode = "ad
       <p id="summaryMsg" class="message"></p>
       <div id="summaryStats" class="stats-grid"></div>
       <div id="summaryList" class="list"></div>
-    </section>`;
+    </section>
+    ${mode === "admin" ? `
+    <section class="card wide danger-zone">
+      <h3>เคลียร์ข้อมูลสรุปรายวัน</h3>
+      <p class="muted">ลบเฉพาะข้อมูลใน attendanceSummary ตามช่วงวันที่ ไม่ลบรายการลงเวลา attendance จริง เหมาะสำหรับล้างสรุปที่คำนวณผิดแล้วกดคำนวณใหม่</p>
+      <div class="filters">
+        <input id="clearSummaryStart" type="date">
+        <input id="clearSummaryEnd" type="date">
+        <input id="clearSummaryConfirm" placeholder="พิมพ์ CLEAR เพื่อยืนยัน">
+        <button id="clearSummaryBtn" class="danger compact">เคลียร์สรุปรายวัน</button>
+      </div>
+      <p id="clearSummaryMsg" class="message"></p>
+    </section>` : ""}`;
   document.getElementById("summaryStart").value = todayKey();
   document.getElementById("summaryEnd").value = todayKey();
+  if (mode === "admin") {
+    document.getElementById("clearSummaryStart").value = todayKey();
+    document.getElementById("clearSummaryEnd").value = todayKey();
+    document.getElementById("clearSummaryBtn").onclick = () => clearDailySummary(currentEmployee);
+  }
   document.getElementById("rebuildSummaryBtn").onclick = () => rebuildSummary(currentEmployee, mode);
   document.getElementById("loadSummaryBtn").onclick = () => loadSummary(currentEmployee, mode);
   document.getElementById("exportSummaryCsvBtn").onclick = () => exportSummaryCsv(currentEmployee, mode);
   await loadSummary(currentEmployee, mode);
+}
+
+async function clearDailySummary(currentEmployee) {
+  const msg = document.getElementById("clearSummaryMsg");
+  const btn = document.getElementById("clearSummaryBtn");
+  const start = document.getElementById("clearSummaryStart").value;
+  const end = document.getElementById("clearSummaryEnd").value;
+  const confirmText = document.getElementById("clearSummaryConfirm").value.trim();
+
+  if (!start || !end) {
+    msg.textContent = "กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด";
+    return;
+  }
+  if (start > end) {
+    msg.textContent = "วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด";
+    return;
+  }
+  if (confirmText !== "CLEAR") {
+    msg.textContent = "กรุณาพิมพ์ CLEAR เพื่อยืนยันการลบ";
+    return;
+  }
+  if (!window.confirm(`ยืนยันลบข้อมูลสรุปรายวันตั้งแต่ ${start} ถึง ${end}?\nรายการลงเวลา attendance จริงจะไม่ถูกลบ`)) return;
+
+  msg.textContent = "กำลังเคลียร์ข้อมูลสรุปรายวัน...";
+  btn.disabled = true;
+  try {
+    let deleted = 0;
+    while (true) {
+      const snap = await db.collection("attendanceSummary")
+        .where("dateKey", ">=", start)
+        .where("dateKey", "<=", end)
+        .limit(400)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 400) break;
+    }
+
+    await db.collection("auditLogs").add({
+      action: "CLEAR_DAILY_SUMMARY",
+      actorId: currentEmployee?.id || "",
+      actorCode: currentEmployee?.employeeCode || "",
+      actorName: currentEmployee?.fullName || "",
+      dateKey: todayKey(),
+      clientTime: new Date().toISOString(),
+      detail: { collection: "attendanceSummary", start, end, deleted },
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(() => null);
+
+    document.getElementById("clearSummaryConfirm").value = "";
+    msg.textContent = `เคลียร์สรุปรายวันสำเร็จ ${deleted} รายการ`;
+    await loadSummary(currentEmployee, "admin");
+  } catch (err) {
+    msg.textContent = "เคลียร์ข้อมูลไม่สำเร็จ: " + err.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function rebuildSummary(currentEmployee, mode) {
