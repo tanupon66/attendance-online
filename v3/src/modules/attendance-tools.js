@@ -1,5 +1,6 @@
 import { db } from "../core/firebase.js";
 import { safeText, todayKey, fmtDateTime } from "../core/utils.js";
+import { rebuildDailySummaryForEmployee } from "./summary.js";
 
 const OT_COLLECTION = "otRequests";
 const LOG_COLLECTION = "auditLogs";
@@ -166,7 +167,7 @@ async function saveManualAttendance(admin) {
   const employeeId = select.value, type = val("manualType"), dateKey = val("manualDate"), timeText = val("manualTime"), note = val("manualNote");
   if (!employeeId || !dateKey || !timeText) throw new Error("กรุณาเลือกพนักงาน วันที่ และเวลา");
   const dt = new Date(`${dateKey}T${timeText}:00`);
-  await db.collection("attendance").add({
+  const docRef = await db.collection("attendance").add({
     employeeId,
     employeeCode: opt.dataset.code || "",
     fullName: opt.dataset.name || "",
@@ -187,12 +188,16 @@ async function saveManualAttendance(admin) {
     distanceMeters: null,
     inGeofence: null,
     geofenceMode: "admin_manual",
+    geofenceApprovalStatus: "not_required",
+    attendanceStatus: "valid",
+    approvedForUse: true,
     adminNote: note,
     adminBy: admin.employeeCode || admin.id || "admin",
     adminByName: admin.fullName || "ผู้ดูแลระบบ"
   });
-  await writeLog("MANUAL_ATTENDANCE_ADD", admin, { employeeCode: opt.dataset.code || "", type, dateKey, timeText, note });
-  setMsg("manualMsg", "เพิ่มเวลาเข้า/ออกงานสำเร็จ");
+  await writeLog("MANUAL_ATTENDANCE_ADD", admin, { attendanceId: docRef.id, employeeCode: opt.dataset.code || "", type, dateKey, timeText, note });
+  await rebuildDailySummaryForEmployee(employeeId, dateKey);
+  setMsg("manualMsg", "เพิ่มเวลาเข้า/ออกงานสำเร็จ และอัปเดตสรุป/Payroll แล้ว");
   document.getElementById("manualNote").value = "";
 }
 

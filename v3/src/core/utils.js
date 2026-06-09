@@ -6,7 +6,10 @@ export function safeText(value) {
   }[s]));
 }
 
-export function todayKey() { return new Date().toISOString().slice(0, 10); }
+export function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
 export function monthKey() { return new Date().toISOString().slice(0, 7); }
 export function pad(n) { return String(n).padStart(2, "0"); }
 
@@ -36,16 +39,21 @@ export function parseDateTime(dateKey, hhmm) { return (!dateKey || !hhmm) ? null
 export function hoursBetween(a, b) { return (!a || !b || b <= a) ? 0 : (b - a) / 36e5; }
 export function minutesBetween(a, b) { return (!a || !b || b <= a) ? 0 : Math.round((b - a) / 60000); }
 export function recTime(r) {
-  if (r.createdAt?.toDate) return r.createdAt.toDate();
-  if (r.clientTime) return new Date(r.clientTime);
-  if (r.clientTimeText) return new Date(String(r.clientTimeText).replace(" ", "T"));
+  // ใช้ clientTime ก่อน createdAt เสมอ เพราะ createdAt คือเวลาที่บันทึกลงระบบ
+  // แต่ clientTime คือเวลาเข้า/ออกงานจริง โดยเฉพาะรายการที่แอดมินเพิ่มย้อนหลัง
+  if (r?.clientTime) return new Date(r.clientTime);
+  if (r?.clientTimeText) return new Date(String(r.clientTimeText).replace(" ", "T"));
+  if (r?.createdAt?.toDate) return r.createdAt.toDate();
   return null;
 }
 export function dateRange(start, end) {
   const out = [];
   let d = new Date(`${start}T00:00:00`);
   const e = new Date(`${end}T00:00:00`);
-  while (d <= e) { out.push(d.toISOString().slice(0, 10)); d.setDate(d.getDate()+1); }
+  while (d <= e) {
+    out.push(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`);
+    d.setDate(d.getDate()+1);
+  }
   return out;
 }
 export function money(n) { return Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

@@ -1,5 +1,6 @@
 import { db } from "../core/firebase.js";
-import { safeText, todayKey, fmtDateTime, distanceMeters } from "../core/utils.js";
+import { safeText, todayKey, fmtDateTime, distanceMeters, recTime } from "../core/utils.js";
+import { rebuildDailySummaryForEmployee } from "./summary.js";
 
 let mediaStream = null, capturedDataUrl = null, currentPosition = null;
 let companySettings = {
@@ -189,6 +190,7 @@ async function clock(employee, type) {
     userAgent: navigator.userAgent
   });
   await writeAttendanceLog(outsideNeedsApproval ? "ATTENDANCE_OUTSIDE_RADIUS_PENDING" : "ATTENDANCE_CLOCK", employee, { type, dateKey: todayKey(), distanceMeters: dist, inGeofence: inGeo, geofenceRequired: required });
+  await rebuildDailySummaryForEmployee(employee.id, todayKey());
   capturedDataUrl = null; currentPosition = null;
   document.getElementById("preview").classList.add("hidden");
   document.getElementById("gpsStatus").textContent = "";
@@ -198,7 +200,7 @@ async function clock(employee, type) {
 
 async function autoClock(employee) {
   const snap = await db.collection("attendance").where("employeeId", "==", employee.id).where("dateKey", "==", todayKey()).get();
-  const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+  const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (recTime(a)?.getTime() || 0) - (recTime(b)?.getTime() || 0));
   const validRows = rows.filter(r => r.geofenceApprovalStatus !== "rejected");
   const last = validRows.at(-1);
   await clock(employee, !last || last.type === "OUT" ? "IN" : "OUT");
@@ -209,7 +211,7 @@ async function loadMyAttendance(employee) {
   list.innerHTML = `<div class="empty-state"><p>กำลังโหลด...</p></div>`;
   try {
     const snap = await db.collection("attendance").where("employeeId", "==", employee.id).where("dateKey", "==", todayKey()).get();
-    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (recTime(b)?.getTime() || 0) - (recTime(a)?.getTime() || 0));
     list.innerHTML = rows.length ? rows.map(itemCard).join("") : `<div class="empty-state"><p>วันนี้ยังไม่มีรายการ</p></div>`;
     rows.forEach(r => document.getElementById(`att-${r.id}`).onclick = () => openDetail(r));
   } catch (err) { list.innerHTML = `<div class="empty-state error-text"><p>${safeText(err.message)}</p></div>`; }
@@ -220,7 +222,7 @@ async function loadAdminAttendance() {
   list.innerHTML = `<div class="empty-state"><p>กำลังโหลด...</p></div>`;
   try {
     const snap = await db.collection("attendance").where("dateKey", ">=", start).where("dateKey", "<=", end).get();
-    let rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    let rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (recTime(b)?.getTime() || 0) - (recTime(a)?.getTime() || 0));
     if (filter === "pending") rows = rows.filter(r => r.geofenceApprovalStatus === "pending");
     if (filter === "approved") rows = rows.filter(r => r.geofenceApprovalStatus === "approved");
     if (filter === "rejected") rows = rows.filter(r => r.geofenceApprovalStatus === "rejected");
@@ -248,13 +250,15 @@ async function reviewOutsideAttendance(row, status) {
     reviewedByName: admin.fullName || "ผู้ดูแลระบบ"
   });
   await writeAttendanceLog(ok ? "GEOFENCE_ATTENDANCE_APPROVE" : "GEOFENCE_ATTENDANCE_REJECT", admin, { attendanceId: row.id, employeeCode: row.employeeCode, dateKey: row.dateKey, type: row.type, distanceMeters: row.distanceMeters });
+  await rebuildDailySummaryForEmployee(row.employeeId, row.dateKey);
   await loadAdminAttendance();
 }
 
 function itemCard(r) {
   const label = r.type === "IN" ? "เข้างาน" : "ออกงาน";
   const geoLabel = r.inGeofence === false ? "นอกพื้นที่" : r.inGeofence === true ? "ในพื้นที่" : "ไม่ตรวจ";
-  const time = r.createdAt?.toDate ? fmtDateTime(r.createdAt.toDate()) : (r.clientTimeText || r.clientTime || "-");
+  const t = recTime(r);
+  const time = t ? fmtDateTime(t) : "-";
   const status = approvalBadge(r);
   return `<article id="att-${r.id}" class="attendance-card clickable ${r.geofenceApprovalStatus === "pending" ? "pending-approval-card" : ""}">${r.photoURL ? `<img src="${r.photoURL}" class="att-thumb" loading="lazy">` : `<div class="att-thumb empty-photo">ไม่มีรูป</div>`}<div><h3>${safeText(r.employeeCode)} • ${safeText(r.fullName)}</h3><p>${label} • ${safeText(time)}</p><div class="badges"><span class="badge">${safeText(r.dateKey)}</span><span class="badge ${r.inGeofence === false ? "bad" : "good"}">${geoLabel}</span>${r.distanceMeters !== null && r.distanceMeters !== undefined ? `<span class="badge">${Math.round(r.distanceMeters)}m</span>` : ""}${status}</div></div></article>`;
 }
@@ -273,7 +277,7 @@ function approvalBadge(r) {
 }
 
 function openDetail(r) {
-  const time = r.createdAt?.toDate ? fmtDateTime(r.createdAt.toDate()) : (r.clientTimeText || r.clientTime || "-"), label = r.type === "IN" ? "เข้างาน" : "ออกงาน";
+  const t = recTime(r), time = t ? fmtDateTime(t) : "-", label = r.type === "IN" ? "เข้างาน" : "ออกงาน";
   document.getElementById("detailTitle").textContent = `${r.employeeCode} • ${r.fullName}`;
   document.getElementById("detailSub").textContent = `${label} • ${time}`;
   document.getElementById("detailBody").innerHTML = `${r.photoURL ? `<img src="${r.photoURL}" class="detail-photo">` : `<p class="muted">ไม่มีรูป</p>`}<div class="detail-grid"><div class="detail-row"><b>สถานะ</b>${approvalBadge(r) || "ปกติ"}<br>นำไปใช้ได้: ${r.approvedForUse === false ? "ไม่" : "ใช่"}</div><div class="detail-row"><b>วันที่/เวลา</b>${safeText(r.dateKey)}<br>${safeText(time)}</div><div class="detail-row"><b>GPS</b>Lat: ${safeText(r.latitude ?? "-")}<br>Lng: ${safeText(r.longitude ?? "-")}<br>Accuracy: ${safeText(r.accuracy ? Math.round(r.accuracy) + "m" : "-")}</div><div class="detail-row"><b>ขอบเขตบริษัท</b>${safeText(r.officeName || companySettings.officeName || "-")}<br>รัศมี: ${safeText(r.radiusMeters || companySettings.radiusMeters || "-")}m<br>ระยะห่าง: ${r.distanceMeters !== null && r.distanceMeters !== undefined ? Math.round(r.distanceMeters) + "m" : "-"}</div><div class="detail-row"><b>แผนที่</b>${r.mapUrl ? `<a href="${r.mapUrl}" target="_blank">เปิด Google Maps</a>` : "-"}</div></div>`;

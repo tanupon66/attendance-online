@@ -1,63 +1,31 @@
-Attendance v3.2.2 Geofence Update
+Attendance v3.2.3 Payroll + Time Fix
 
-ไฟล์นี้เป็นแพตช์เฉพาะไฟล์ที่ต้องเพิ่ม/อัปเดต ไม่ใช่โปรเจกต์ใหม่ทั้งชุด
+ไฟล์อัปเดตนี้แก้ 2 จุดหลัก:
+1) รายการลงเวลาโดยแอดมินไม่ถูกนำไปคิดเงิน
+- เพิ่มสถานะ approvedForUse=true, attendanceStatus=valid ให้รายการที่แอดมินเพิ่ม
+- หลังแอดมินเพิ่มเวลา ระบบจะ rebuild attendanceSummary ของวันนั้นให้อัตโนมัติ
+- Payroll จะเห็นรายการนี้ทันทีเมื่อกดคำนวณ ไม่ต้องไปกดสร้างสรุปเองก่อน
+
+2) การคำนวณเวลาทำงาน/มาสายมั่ว
+- แก้ recTime ให้ใช้ clientTime เป็นหลัก ไม่ใช้ createdAt ก่อน
+  createdAt คือเวลาที่บันทึกลง Firebase แต่ clientTime คือเวลาเข้า/ออกงานจริง
+  สำคัญมากสำหรับรายการที่แอดมินเพิ่มย้อนหลัง
+- แก้ todayKey/dateRange ให้ใช้วันที่ local ของเครื่อง ไม่ใช้ UTC เพื่อลดปัญหาวันเพี้ยน
+- แก้ Summary ให้ไม่นำรายการนอกรัศมีที่ pending/rejected ไปคิดเงิน
+- เพิ่ม lateGraceMinutes ใน employee ได้ ถ้าต้องการผ่อนผันสาย เช่น 5 นาที
+
+ไฟล์ที่ต้องอัปเดต:
+- src/core/utils.js
+- src/modules/summary.js
+- src/modules/attendance.js
+- src/modules/attendance-tools.js
+- service-worker.js
 
 วิธีติดตั้ง:
-1) แตกไฟล์ zip นี้
-2) คัดลอกทุกไฟล์ไปวางทับโปรเจกต์ attendance เดิม โดยคง path เดิมไว้
-   - src/app.js
-   - src/UI/shell.js
-   - src/modules/attendance.js
-   - src/modules/attendance-tools.js
-   - src/modules/geofence-settings.js  (ไฟล์ใหม่)
-   - styles/main.css
-   - service-worker.js
-3) Commit และ push ขึ้น GitHub Pages
-4) เปิดเว็บแล้วกด Refresh/Reload ถ้าใช้เป็น PWA ให้ปิดเปิดแอปใหม่ หรือเคลียร์ cache หากเมนูยังไม่ขึ้น
+1) แตก zip นี้
+2) วางไฟล์ทับ path เดิมในโปรเจกต์
+3) Commit/Push ขึ้น GitHub Pages
+4) เปิดเว็บแล้ว Refresh / Clear site data หากมือถือยังโหลดไฟล์เก่าจาก PWA cache
 
-ฟีเจอร์ที่เพิ่ม:
-- แอดมินมีเมนูใหม่ “ตำแหน่งบริษัท”
-  - ตั้งชื่อสถานที่บริษัท
-  - ตั้ง Latitude / Longitude
-  - ตั้งรัศมีที่อนุญาตเป็นเมตร
-  - ใช้ตำแหน่งปัจจุบันเพื่อดึงพิกัดอัตโนมัติ
-  - เปิด/ปิดค่าเริ่มต้นว่าพนักงานต้องอยู่ในรัศมีหรือไม่
-- กำหนดรายพนักงานได้ว่า “ต้องลงเวลาในรัศมี” หรือ “ไม่บังคับรัศมี”
-- พนักงานที่ถูกบังคับรัศมี ถ้า clock in / clock out นอกพื้นที่:
-  - ระบบยังบันทึกรายการไว้
-  - สถานะจะเป็น “รออนุมัตินอกพื้นที่”
-  - รายการจะยังไม่ถูกนับเป็นรายการใช้งานจริงจนกว่าแอดมินอนุมัติ
-- แอดมินอนุมัติ/ปฏิเสธรายการนอกพื้นที่ได้จากหน้า “รายการลงเวลา”
-- ระบบบันทึก auditLogs เพิ่มสำหรับ:
-  - ATTENDANCE_OUTSIDE_RADIUS_PENDING
-  - GEOFENCE_ATTENDANCE_APPROVE
-  - GEOFENCE_ATTENDANCE_REJECT
-  - GEOFENCE_SETTINGS_UPDATE
-
-ข้อมูลที่เพิ่มใน Firestore:
-1) settings/company
-   - officeName
-   - officeLat
-   - officeLng
-   - radiusMeters
-   - defaultRequireGeofence
-   - allowOutsidePendingApproval
-   - geofenceMode = approval
-
-2) employees/{employeeId}
-   - requireGeofence: true/false
-
-3) attendance/{attendanceId}
-   - officeName / officeLat / officeLng / radiusMeters
-   - distanceMeters
-   - inGeofence
-   - geofenceRequired
-   - geofenceApprovalStatus: not_required / pending / approved / rejected
-   - attendanceStatus: valid / pending_geofence_approval / rejected_geofence
-   - approvedForUse: true/false
-   - reviewedAt / reviewedBy / reviewedByName เมื่อแอดมินตรวจแล้ว
-
-หมายเหตุสำคัญ:
-- พนักงานที่ไม่ได้เปิด requireGeofence จะลงเวลาได้ทั้งในและนอกรัศมี โดยระบบยังบันทึกระยะห่างไว้ให้ตรวจสอบ
-- ถ้าพนักงานถูกบังคับรัศมีและอยู่นอกพื้นที่ ระบบจะให้ลงเวลาได้ก่อน แต่ต้องรอแอดมินอนุมัติ
-- หลังอัปเดตไฟล์ service-worker.js แล้ว ถ้าเว็บยังโหลดไฟล์เก่า ให้กด hard refresh หรือเคลียร์ cache ของ PWA
+หมายเหตุ:
+- รายการที่แอดมินเคยเพิ่มไว้ก่อนแพตช์นี้ ให้ไปหน้า “สรุปสถานะรายวัน” แล้วกด “คำนวณ/สร้างสรุป” ช่วงวันที่ย้อนหลังอีกครั้ง จากนั้น Payroll จะคิดใหม่ถูกต้อง
