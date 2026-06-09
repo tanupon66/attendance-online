@@ -12,6 +12,7 @@ import { renderLeaveModule } from "./modules/leave.js";
 import { renderPayrollModule } from "./modules/payroll.js";
 import { renderNotificationsModule } from "./modules/notifications.js";
 import { renderProfileModule } from "./modules/profile.js";
+import { renderAttendanceToolsModule } from "./modules/attendance-tools.js";
 
 const appEl=document.getElementById("app");
 let currentRoute = new URLSearchParams(location.search).get("route") || "dashboard";
@@ -45,12 +46,13 @@ function bindShell(emp){
 }
 function renderApp(emp,route){currentRoute=route;emp.role==="admin"?renderAdmin(emp,route):renderEmployee(emp,route)}
 function renderAdmin(emp,route){
-  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile")};
+  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),attendanceTools:"เครื่องมือเวลา"};
   appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"admin");
   else if(route==="employees")renderEmployeesModule(root);
   else if(route==="attendance")renderAttendanceModule(root,emp,"admin");
+  else if(route==="attendanceTools")renderAttendanceToolsModule(root,emp,"admin");
   else if(route==="summary")renderSummaryModule(root,emp,"admin");
   else if(route==="calendar")renderCalendarModule(root,emp,"admin");
   else if(route==="leave")renderLeaveModule(root,emp,"admin");
@@ -60,11 +62,12 @@ function renderAdmin(emp,route){
   else root.innerHTML=`<div class="card wide"><h2>${safeText(titleMap[route]||route)}</h2><p class="muted">โมดูลนี้จะทำภายหลัง</p></div>`;
 }
 function renderEmployee(emp,route){
-  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile")};
+  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),ot:"ขอ OT"};
   appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"employee");
   else if(route==="clock")renderAttendanceModule(root,emp,"employee");
+  else if(route==="ot")renderAttendanceToolsModule(root,emp,"employee");
   else if(route==="summary")renderSummaryModule(root,emp,"employee");
   else if(route==="calendar")renderCalendarModule(root,emp,"employee");
   else if(route==="leave")renderLeaveModule(root,emp,"employee");

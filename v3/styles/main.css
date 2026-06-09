@@ -13,3 +13,8 @@
 .offline-bar{top:0;left:0;right:0;border-radius:0;padding:10px;text-align:center;background:rgba(127,29,29,.96);border-color:rgba(239,68,68,.45)}
 body.is-offline .primary{filter:saturate(.7)}
 @media(max-width:680px){.pwa-install-box{display:grid;bottom:112px}.pwa-actions button{flex:1}.update-banner{left:8px;right:8px}}
+
+
+/* Attendance tools module */
+.tools-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tool-tab{background:var(--card2);color:var(--text);border:1px solid var(--border);padding:10px 14px;font-size:14px}.tool-tab.active{background:rgba(56,189,248,.16);border-color:rgba(56,189,248,.45);color:#e0f2fe}.danger-tab.active{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.45);color:#fecaca}.tool-panel{margin-bottom:14px}.tools-form input,.tools-form select{max-width:560px}.tool-card{grid-template-columns:58px 1fr}.tool-icon{width:58px;height:58px;border-radius:18px;display:grid;place-items:center;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.35);font-weight:900;color:#bae6fd}.danger-zone{border-color:rgba(239,68,68,.45);background:rgba(127,29,29,.15)}.log-json{white-space:pre-wrap;overflow:auto;background:rgba(2,6,23,.7);border:1px solid var(--border);border-radius:14px;padding:10px;color:#cbd5e1;font-size:12px}
+@media(max-width:880px){.tools-tabs{overflow-x:auto;flex-wrap:nowrap}.tool-tab{flex:0 0 auto}.tool-card{grid-template-columns:48px 1fr}.tool-icon{width:48px;height:48px;border-radius:16px}}
