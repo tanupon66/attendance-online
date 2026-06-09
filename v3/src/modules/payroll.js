@@ -1,23 +1,33 @@
 import { db } from "../core/firebase.js";
-import { safeText, todayKey, exportCsv, money } from "../core/utils.js";
+import { safeText, todayKey, exportCsv, money, dateRange, parseDateTime } from "../core/utils.js";
+import { rebuildDailySummaryForEmployee } from "./summary.js";
+
+const SUMMARY_COLLECTION = "attendanceSummary";
+const OT_COLLECTION = "otRequests";
 
 export async function renderPayrollModule(container, employee, mode = "admin") {
   container.innerHTML = `
     <div class="module-head">
       <div>
         <h2>Payroll & Slip</h2>
-        <p class="muted">คำนวณเงินเดือน พิมพ์ Slip และ Export CSV แบบละเอียด</p>
+        <p class="muted">คำนวณเงินเดือนจากสรุปรายวัน + OT ที่อนุมัติแล้ว</p>
       </div>
     </div>
 
-    <section class="card wide">
+    <section class="card wide payroll-source-card">
+      <h3>แหล่งข้อมูล Payroll</h3>
+      <p class="muted small">
+        ระบบนี้ดึงข้อมูลจาก <b>attendanceSummary</b> สำหรับวันทำงาน/ชั่วโมง/มาสาย และดึง <b>otRequests</b> เฉพาะสถานะ <b>approved</b> มาคิดค่า OT เพิ่มเติม
+      </p>
       <div class="filters">
         <input id="payStart" type="date" value="${todayKey()}">
         <input id="payEnd" type="date" value="${todayKey()}">
         <button id="loadPayrollBtn" class="primary compact">คำนวณ</button>
+        <button id="syncPayrollSummaryBtn" class="secondary compact">สร้างสรุปรายวันใหม่ก่อนคำนวณ</button>
         <button id="exportPayrollCsvBtn" class="secondary compact">Export Payroll CSV</button>
         <button id="exportSlipCsvBtn" class="secondary compact">Export Slip CSV</button>
       </div>
+      <p id="payrollMsg" class="message"></p>
       <div id="payrollList" class="list"></div>
     </section>
 
@@ -34,6 +44,7 @@ export async function renderPayrollModule(container, employee, mode = "admin") {
   `;
 
   document.getElementById("loadPayrollBtn").onclick = () => loadPayroll(employee, mode);
+  document.getElementById("syncPayrollSummaryBtn").onclick = () => syncSummaryThenLoadPayroll(employee, mode);
   document.getElementById("exportPayrollCsvBtn").onclick = () => exportPayroll(employee, mode);
   document.getElementById("exportSlipCsvBtn").onclick = () => exportSlipCsv(employee, mode);
   document.getElementById("closeSlipBtn").onclick = closeSlip;
@@ -42,14 +53,54 @@ export async function renderPayrollModule(container, employee, mode = "admin") {
   await loadPayroll(employee, mode);
 }
 
+async function syncSummaryThenLoadPayroll(employee, mode) {
+  const msg = document.getElementById("payrollMsg");
+  const btn = document.getElementById("syncPayrollSummaryBtn");
+  const start = document.getElementById("payStart").value;
+  const end = document.getElementById("payEnd").value;
+
+  if (!start || !end || start > end) {
+    msg.textContent = "กรุณาเลือกช่วงวันที่ให้ถูกต้อง";
+    return;
+  }
+
+  msg.textContent = "กำลังสร้างสรุปรายวันใหม่จากรายการลงเวลา...";
+  btn.disabled = true;
+  try {
+    const empSnap = mode === "admin"
+      ? await db.collection("employees").get()
+      : { docs: [await db.collection("employees").doc(employee.id).get()] };
+    const employees = empSnap.docs
+      .filter(d => d.exists !== false)
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(e => e.active !== false && (mode === "admin" || e.id === employee.id));
+
+    let count = 0;
+    for (const dk of dateRange(start, end)) {
+      for (const emp of employees) {
+        await rebuildDailySummaryForEmployee(emp.id, dk);
+        count++;
+      }
+    }
+    msg.textContent = `สร้างสรุปรายวันใหม่สำเร็จ ${count} รายการ แล้วกำลังคำนวณ Payroll...`;
+    await loadPayroll(employee, mode);
+    msg.textContent = `อัปเดตสรุปรายวันและ Payroll สำเร็จ ${count} รายการ`;
+  } catch (err) {
+    msg.textContent = "สร้างสรุปใหม่ไม่สำเร็จ: " + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function getPayrollRows(employee, mode) {
   const start = document.getElementById("payStart").value;
   const end = document.getElementById("payEnd").value;
 
-  const [sumSnap, empSnap, benefitSnap] = await Promise.all([
-    db.collection("attendanceSummary").where("dateKey", ">=", start).where("dateKey", "<=", end).get(),
+  const [sumSnap, empSnap, benefitSnap, otSnap] = await Promise.all([
+    db.collection(SUMMARY_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get(),
     db.collection("employees").get(),
-    db.collection("benefits").get().catch(() => ({ docs: [] }))
+    db.collection("benefits").get().catch(() => ({ docs: [] })),
+    db.collection(OT_COLLECTION).where("dateKey", ">=", start).where("dateKey", "<=", end).get().catch(() => ({ docs: [] }))
   ]);
 
   const employees = {};
@@ -59,38 +110,53 @@ async function getPayrollRows(employee, mode) {
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(b => b.active !== false);
 
-  let rows = sumSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (mode !== "admin") rows = rows.filter(r => r.employeeId === employee.id);
+  let summaryRows = sumSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  let otRows = otSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(r => r.status === "approved");
+
+  if (mode !== "admin") {
+    summaryRows = summaryRows.filter(r => r.employeeId === employee.id);
+    otRows = otRows.filter(r => r.employeeId === employee.id);
+  }
 
   const by = {};
 
-  rows.forEach(r => {
-    const e = employees[r.employeeId] || {};
-    const k = r.employeeId;
-
-    by[k] ||= {
-      employeeId: k,
-      employeeCode: r.employeeCode,
-      fullName: r.fullName,
-      department: r.department,
-      position: r.position,
+  function ensureEmployeeRow(employeeId, seed = {}) {
+    if (!employeeId) return null;
+    const e = employees[employeeId] || {};
+    by[employeeId] ||= {
+      employeeId,
+      employeeCode: seed.employeeCode || e.employeeCode || "",
+      fullName: seed.fullName || e.fullName || "",
+      department: seed.department || e.department || "",
+      position: seed.position || e.position || "",
       payType: e.payType || "daily",
       dailyRate: Number(e.dailyRate || 0),
       hourlyRate: Number(e.hourlyRate || 0),
       monthlySalary: Number(e.monthlySalary || 0),
       otMultiplier: Number(e.otMultiplier || 1.5),
+      standardHoursPerDay: Number(e.regularHours || 8),
       workDays: 0,
       paidLeave: 0,
       unpaidLeave: 0,
       holidaysPaid: 0,
       absentDays: 0,
+      incompleteDays: 0,
       lateMinutes: 0,
       netHours: 0,
       regularHours: 0,
+      approvedOtHours: 0,
+      approvedOtCount: 0,
+      otDetails: [],
       rawRows: []
     };
+    return by[employeeId];
+  }
 
-    const o = by[k];
+  summaryRows.forEach(r => {
+    const o = ensureEmployeeRow(r.employeeId, r);
+    if (!o) return;
     o.rawRows.push(r);
 
     if (["PRESENT", "LATE"].includes(r.status)) o.workDays++;
@@ -98,17 +164,43 @@ async function getPayrollRows(employee, mode) {
     if (r.status === "LEAVE_UNPAID") o.unpaidLeave++;
     if (r.status === "HOLIDAY_PAID") o.holidaysPaid++;
     if (r.status === "ABSENT") o.absentDays++;
+    if (r.status === "INCOMPLETE") o.incompleteDays++;
 
     o.lateMinutes += Number(r.lateMinutes || 0);
     o.netHours += Number(r.netHours || 0);
     o.regularHours += Number(r.regularHours || 0);
   });
 
-  return Object.values(by).map(o => calcPay(o, benefits, start, end));
+  otRows.forEach(r => {
+    const o = ensureEmployeeRow(r.employeeId, r);
+    if (!o) return;
+    const hours = getOtHours(r);
+    o.approvedOtHours += hours;
+    o.approvedOtCount += 1;
+    o.otDetails.push({
+      dateKey: r.dateKey || "",
+      startTime: r.startTime || "",
+      endTime: r.endTime || "",
+      hours,
+      reason: r.reason || ""
+    });
+  });
+
+  return Object.values(by)
+    .filter(o => o.rawRows.length || o.approvedOtCount)
+    .map(o => calcPay(o, benefits, start, end));
+}
+
+function getOtHours(r) {
+  const start = parseDateTime(r.dateKey, r.startTime);
+  let end = parseDateTime(r.dateKey, r.endTime);
+  if (!start || !end) return Number(r.hours || r.otHours || 0);
+  if (end <= start) end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+  return Math.max(0, (end - start) / 36e5);
 }
 
 function calcPay(o, benefits, start, end) {
-  const hourly = o.hourlyRate || (o.dailyRate ? o.dailyRate / 8 : 0);
+  const hourly = deriveHourly(o);
 
   let basePay = 0;
   let payNote = "";
@@ -137,11 +229,12 @@ function calcPay(o, benefits, start, end) {
     }
   });
 
+  const otPay = o.approvedOtHours * hourly * o.otMultiplier;
   const lateDeduct = o.lateMinutes * (hourly / 60);
   const absentDeduct = o.payType === "monthly" ? o.absentDays * (o.monthlySalary / 30) : 0;
   const unpaidLeaveDeduct = o.payType === "monthly" ? o.unpaidLeave * (o.monthlySalary / 30) : 0;
 
-  const grossPay = basePay + benefitPay;
+  const grossPay = basePay + benefitPay + otPay;
   const totalDeduct = lateDeduct + absentDeduct + unpaidLeaveDeduct;
   const netPay = Math.max(0, grossPay - totalDeduct);
 
@@ -154,6 +247,7 @@ function calcPay(o, benefits, start, end) {
     basePay,
     benefitPay,
     benefitDetails,
+    otPay,
     grossPay,
     lateDeduct,
     absentDeduct,
@@ -163,18 +257,32 @@ function calcPay(o, benefits, start, end) {
   };
 }
 
+function deriveHourly(o) {
+  if (Number(o.hourlyRate || 0) > 0) return Number(o.hourlyRate || 0);
+  if (Number(o.dailyRate || 0) > 0) return Number(o.dailyRate || 0) / Number(o.standardHoursPerDay || 8);
+  if (Number(o.monthlySalary || 0) > 0) return Number(o.monthlySalary || 0) / 30 / Number(o.standardHoursPerDay || 8);
+  return 0;
+}
+
 async function loadPayroll(employee, mode) {
   const list = document.getElementById("payrollList");
+  const msg = document.getElementById("payrollMsg");
   list.innerHTML = `<div class="empty-state">กำลังคำนวณ...</div>`;
 
   try {
     const rows = await getPayrollRows(employee, mode);
+    const totalOtHours = rows.reduce((sum, r) => sum + Number(r.approvedOtHours || 0), 0);
+    const totalOtPay = rows.reduce((sum, r) => sum + Number(r.otPay || 0), 0);
+    msg.textContent = rows.length
+      ? `พบข้อมูล ${rows.length} คน • OT อนุมัติแล้ว ${totalOtHours.toFixed(2)} ชม. • ค่า OT ${money(totalOtPay)} บาท`
+      : "ยังไม่มีข้อมูลในช่วงวันที่นี้";
     list.innerHTML = rows.length
       ? rows.map((r, i) => payrollCard(r, i)).join("")
-      : `<div class="empty-state">ยังไม่มีข้อมูล summary</div>`;
+      : `<div class="empty-state">ยังไม่มีข้อมูล Payroll ถ้าพึ่งแก้เวลา ให้กด “สร้างสรุปรายวันใหม่ก่อนคำนวณ”</div>`;
 
     rows.forEach((r, i) => {
-      document.getElementById(`slip-${i}`).onclick = () => openSlip(r);
+      const btn = document.getElementById(`slip-${i}`);
+      if (btn) btn.onclick = () => openSlip(r);
     });
   } catch (err) {
     list.innerHTML = `<div class="empty-state error-text">${safeText(err.message)}</div>`;
@@ -192,6 +300,9 @@ function payrollCard(r, i) {
         <span class="badge info">ลาจ่าย ${r.paidLeave}</span>
         <span class="badge bad">ขาด ${r.absentDays}</span>
         <span class="badge warn">สาย ${r.lateMinutes} นาที</span>
+        <span class="badge">ชั่วโมงปกติ ${Number(r.regularHours || 0).toFixed(2)}</span>
+        <span class="badge good">OT ${Number(r.approvedOtHours || 0).toFixed(2)} ชม.</span>
+        <span class="badge good">ค่า OT ${money(r.otPay)}</span>
         <span class="badge">รายได้ ${money(r.grossPay)}</span>
         <span class="badge bad">หัก ${money(r.totalDeduct)}</span>
         <span class="badge good">สุทธิ ${money(r.netPay)} บาท</span>
@@ -203,6 +314,10 @@ function payrollCard(r, i) {
 
 function openSlip(r) {
   const canPrint = r.payType !== "monthly";
+  const otDetailHtml = r.otDetails.length
+    ? `<div class="slip-ot-details"><b>รายละเอียด OT อนุมัติแล้ว</b><ul>${r.otDetails.map(o => `<li>${safeText(o.dateKey)} ${safeText(o.startTime)}-${safeText(o.endTime)} = ${Number(o.hours || 0).toFixed(2)} ชม. ${o.reason ? `• ${safeText(o.reason)}` : ""}</li>`).join("")}</ul></div>`
+    : `<p class="muted">ไม่มี OT ที่อนุมัติในงวดนี้</p>`;
+
   document.getElementById("slipBody").innerHTML = `
     <div class="print-slip">
       <div class="slip-title">
@@ -221,8 +336,10 @@ function openSlip(r) {
         <tr><td>ลาไม่จ่ายเงิน</td><td>${r.unpaidLeave}</td></tr>
         <tr><td>วันหยุดจ่ายเงิน</td><td>${r.holidaysPaid}</td></tr>
         <tr><td>ขาดงาน</td><td>${r.absentDays}</td></tr>
-        <tr><td>ชั่วโมงสุทธิ</td><td>${r.netHours.toFixed(2)}</td></tr>
+        <tr><td>ชั่วโมงสุทธิ</td><td>${Number(r.netHours || 0).toFixed(2)}</td></tr>
+        <tr><td>ชั่วโมงปกติที่คิดเงิน</td><td>${Number(r.regularHours || 0).toFixed(2)}</td></tr>
         <tr><td>มาสาย</td><td>${r.lateMinutes} นาที</td></tr>
+        <tr><td>OT อนุมัติแล้ว</td><td>${Number(r.approvedOtHours || 0).toFixed(2)} ชม. × ${money(r.hourly)} × ${Number(r.otMultiplier || 1.5)} = ${money(r.otPay)} บาท</td></tr>
         <tr><td>รายได้ฐาน</td><td>${money(r.basePay)} บาท</td></tr>
         <tr><td>สวัสดิการ/เงินเพิ่ม</td><td>${money(r.benefitPay)} บาท</td></tr>
         <tr><td>รายได้รวม</td><td>${money(r.grossPay)} บาท</td></tr>
@@ -232,6 +349,7 @@ function openSlip(r) {
         <tr><th>สุทธิ</th><th>${money(r.netPay)} บาท</th></tr>
       </table>
 
+      ${otDetailHtml}
       ${r.benefitDetails.length ? `<p class="muted">รายละเอียดเงินเพิ่ม: ${safeText(r.benefitDetails.join(", "))}</p>` : ""}
 
       <div class="signature-row">
@@ -266,11 +384,17 @@ async function exportPayroll(employee, mode) {
     unpaidLeave: r.unpaidLeave,
     holidaysPaid: r.holidaysPaid,
     absentDays: r.absentDays,
+    incompleteDays: r.incompleteDays,
     lateMinutes: r.lateMinutes,
     netHours: r.netHours,
     regularHours: r.regularHours,
+    approvedOtCount: r.approvedOtCount,
+    approvedOtHours: r.approvedOtHours,
+    otMultiplier: r.otMultiplier,
+    hourly: r.hourly,
     basePay: r.basePay,
     benefitPay: r.benefitPay,
+    otPay: r.otPay,
     grossPay: r.grossPay,
     lateDeduction: r.lateDeduct,
     absentDeduction: r.absentDeduct,
@@ -285,6 +409,7 @@ async function exportSlipCsv(employee, mode) {
   exportCsv("payroll-slip-lines.csv", rows.flatMap(r => ([
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "รายได้ฐาน", amount: r.basePay },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "สวัสดิการ/เงินเพิ่ม", amount: r.benefitPay },
+    { employeeCode: r.employeeCode, fullName: r.fullName, line: "OT อนุมัติ", amount: r.otPay, hours: r.approvedOtHours, multiplier: r.otMultiplier },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักมาสาย", amount: -r.lateDeduct },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักขาดงาน", amount: -r.absentDeduct },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักลาไม่จ่ายเงิน", amount: -r.unpaidLeaveDeduct },
