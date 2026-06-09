@@ -1,6 +1,6 @@
 import { initFirebase, db } from "./core/firebase.js";
 import { safeText, todayKey, nowText, sha256, setSession, getSession, clearSession } from "./core/utils.js";
-import { t, bindLangSelector } from "./core/i18n.js";
+import { t, bindLangSelector, translatePage, initI18nAutoTranslate } from "./core/i18n.js";
 import { initPwa } from "./core/pwa.js";
 import { renderLoading, shell } from "./UI/shell.js";
 import { renderDashboardModule } from "./modules/dashboard.js";
@@ -20,6 +20,7 @@ let currentRoute = new URLSearchParams(location.search).get("route") || "dashboa
 
 function renderLogin(message=""){
   appEl.innerHTML=`<main class="screen login-screen"><section class="login-card"><div class="brand-row"><div class="logo">A3</div><div><h1>${t("appName")}</h1><p class="muted">Step 7 Full Pack</p></div></div><label>${t("employeeCode")}</label><input id="loginCode" autocomplete="username" placeholder="admin หรือ 001"><label>${t("pin")}</label><input id="loginPin" type="password" autocomplete="current-password" placeholder="PIN"><button id="loginBtn" class="primary">${t("login")}</button><button id="seedAdminBtn" class="secondary">สร้างแอดมินเริ่มต้น</button><p id="loginMsg" class="message">${safeText(message)}</p></section></main>`;
+  translatePage(appEl);
   document.getElementById("loginBtn").onclick=login;
   document.getElementById("seedAdminBtn").onclick=seedAdmin;
   document.getElementById("loginPin").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
@@ -47,8 +48,8 @@ function bindShell(emp){
 }
 function renderApp(emp,route){currentRoute=route;emp.role==="admin"?renderAdmin(emp,route):renderEmployee(emp,route)}
 function renderAdmin(emp,route){
-  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),attendanceTools:"เครื่องมือเวลา",geofenceSettings:"ตำแหน่งบริษัท"};
-  appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});bindShell(emp);
+  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),attendanceTools:t("attendanceTools"),geofenceSettings:t("geofenceSettings")};
+  appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});translatePage(appEl);bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"admin");
   else if(route==="employees")renderEmployeesModule(root);
@@ -64,8 +65,8 @@ function renderAdmin(emp,route){
   else root.innerHTML=`<div class="card wide"><h2>${safeText(titleMap[route]||route)}</h2><p class="muted">โมดูลนี้จะทำภายหลัง</p></div>`;
 }
 function renderEmployee(emp,route){
-  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),ot:"ขอ OT"};
-  appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});bindShell(emp);
+  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),ot:t("requestOT")};
+  appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});translatePage(appEl);bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"employee");
   else if(route==="clock")renderAttendanceModule(root,emp,"employee");
@@ -78,5 +79,5 @@ function renderEmployee(emp,route){
   else if(route==="profile")renderProfileModule(root,emp);
   else root.innerHTML=`<div class="card wide"><h2>${safeText(titleMap[route]||route)}</h2><p class="muted">โมดูลนี้จะทำภายหลัง</p></div>`;
 }
-async function start(){renderLoading(appEl);try{await initFirebase();await restoreSession()}catch(err){appEl.innerHTML=`<main class="screen center"><div class="card error"><h1>โหลดระบบไม่สำเร็จ</h1><p>${safeText(err.message)}</p></div></main>`}}
+async function start(){initI18nAutoTranslate(document.body);renderLoading(appEl);translatePage(appEl);try{await initFirebase();await restoreSession()}catch(err){appEl.innerHTML=`<main class="screen center"><div class="card error"><h1>โหลดระบบไม่สำเร็จ</h1><p>${safeText(err.message)}</p></div></main>`}}
 start();

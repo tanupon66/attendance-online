@@ -1,5 +1,6 @@
 
 import { db } from "./firebase.js";
+import { translateText } from "./i18n.js";
 
 let deferredPrompt = null;
 
@@ -51,12 +52,12 @@ function showInstallBanner() {
   box.className = "pwa-install-box";
   box.innerHTML = `
     <div>
-      <b>ติดตั้ง Attendance เป็นแอป</b>
-      <span>เปิดได้จากหน้าจอมือถือ ใช้งานเร็วขึ้น และรองรับ Offline</span>
+      <b>${translateText("ติดตั้ง Attendance เป็นแอป")}</b>
+      <span>${translateText("เปิดได้จากหน้าจอมือถือ ใช้งานเร็วขึ้น และรองรับ Offline")}</span>
     </div>
     <div class="pwa-actions">
-      <button id="pwaInstallBtn" class="primary compact">ติดตั้ง</button>
-      <button id="pwaDismissBtn" class="secondary compact">ปิด</button>
+      <button id="pwaInstallBtn" class="primary compact">${translateText("ติดตั้ง")}</button>
+      <button id="pwaDismissBtn" class="secondary compact">${translateText("ปิด")}</button>
     </div>
   `;
   document.body.appendChild(box);
@@ -84,7 +85,7 @@ function setupNetworkStatus() {
         bar = document.createElement("div");
         bar.id = "offlineBar";
         bar.className = "offline-bar";
-        bar.textContent = "ออฟไลน์: ข้อมูลใหม่จะบันทึกไม่ได้จนกว่าจะมีอินเทอร์เน็ต";
+        bar.textContent = translateText("ออฟไลน์: ข้อมูลใหม่จะบันทึกไม่ได้จนกว่าจะมีอินเทอร์เน็ต");
         document.body.appendChild(bar);
       }
     } else if (bar) {
@@ -110,8 +111,8 @@ function showUpdateBanner(version) {
   box.id = "updateBanner";
   box.className = "update-banner";
   box.innerHTML = `
-    <span>มีเวอร์ชันใหม่พร้อมใช้งาน ${version ? `(${version})` : ""}</span>
-    <button id="reloadUpdateBtn" class="primary compact">รีโหลด</button>
+    <span>${translateText("มีเวอร์ชันใหม่พร้อมใช้งาน")} ${version ? `(${version})` : ""}</span>
+    <button id="reloadUpdateBtn" class="primary compact">${translateText("รีโหลด")}</button>
   `;
   document.body.appendChild(box);
   document.getElementById("reloadUpdateBtn").onclick = () => location.reload();
@@ -147,12 +148,12 @@ async function flushLocalQueue() {
 
 function exposePushPermission(currentEmployee) {
   window.requestAttendancePush = async function() {
-    if (!("Notification" in window)) return alert("เครื่องนี้ไม่รองรับ Notification");
+    if (!("Notification" in window)) return alert(translateText("เครื่องนี้ไม่รองรับ Notification"));
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") return alert("ยังไม่ได้อนุญาตแจ้งเตือน");
+    if (permission !== "granted") return alert(translateText("ยังไม่ได้อนุญาตแจ้งเตือนบนเครื่องนี้"));
 
     new Notification("Attendance Online", {
-      body: "เปิดแจ้งเตือนบนเครื่องนี้แล้ว",
+      body: translateText("เปิดแจ้งเตือนบนเครื่องนี้แล้ว"),
       icon: "./icons/icon-192.png"
     });
 
@@ -196,9 +197,9 @@ async function setupPaydayReminder(currentEmployee) {
     const storageKey = `attendance_payday_noti_${currentEmployee.id}_${dateKey}_${today}`;
     if (localStorage.getItem(storageKey) === "1") return;
 
-    const title = settings.monthlyPaydayTitle || "วันจ่ายเงินพนักงานรายเดือน";
+    const title = translateText(settings.monthlyPaydayTitle || "วันจ่ายเงินพนักงานรายเดือน");
     const body = today === dateKey
-      ? `วันนี้เป็น${title}`
+      ? `${translateText("วันนี้เป็น")}${title}`
       : `${title} วันที่ ${dateKey}`;
 
     await db.collection("notifications").add({
