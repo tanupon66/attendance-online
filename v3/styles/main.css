@@ -1,0 +1,95 @@
+:root {
+  --bg: #0f172a;
+  --card: #111827;
+  --card2: #1e293b;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --primary: #38bdf8;
+  --danger: #ef4444;
+  --border: rgba(148, 163, 184, 0.25);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: linear-gradient(135deg, #020617, #0f172a);
+  color: var(--text);
+}
+
+.screen {
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.center {
+  display: grid;
+  place-items: center;
+}
+
+.card,
+.login-card {
+  width: min(100%, 420px);
+  margin: auto;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+}
+
+h1 {
+  margin: 0 0 8px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+label {
+  display: block;
+  margin: 14px 0 6px;
+  color: var(--muted);
+}
+
+input {
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #020617;
+  color: var(--text);
+  font-size: 16px;
+}
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.primary {
+  background: var(--primary);
+  color: #00111f;
+}
+
+.secondary {
+  background: var(--card2);
+  color: var(--text);
+}
+
+.message {
+  margin-top: 12px;
+  color: var(--primary);
+}
+
+.error {
+  border-color: var(--danger);
+}
