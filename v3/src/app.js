@@ -1,7 +1,7 @@
 import { initFirebase, db } from "./core/firebase.js";
 import { safeText, todayKey, nowText, sha256, setSession, getSession, clearSession } from "./core/utils.js";
 import { t, bindLangSelector } from "./core/i18n.js";
-import { renderLoading, shell } from "./ui/shell.js";
+import { renderLoading, shell } from "./UI/shell.js";
 import { renderEmployeesModule } from "./modules/employees.js";
 import { renderAttendanceModule } from "./modules/attendance.js";
 import { renderSummaryModule } from "./modules/summary.js";
