@@ -1,5 +1,5 @@
 
-const APP_VERSION = "3.2.9-benefits-payroll";
+const APP_VERSION = "3.2.10-dashboard-company-stats";
 const CACHE_NAME = `attendance-v${APP_VERSION}`;
 const RUNTIME_CACHE = `attendance-runtime-v${APP_VERSION}`;
 

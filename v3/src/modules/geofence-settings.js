@@ -6,6 +6,7 @@ const COMPANY_DOC = "company";
 const LOG_COLLECTION = "auditLogs";
 
 const defaultSettings = {
+  companyName: "ชื่อบริษัท",
   officeName: "สำนักงานใหญ่",
   officeLat: "",
   officeLng: "",
@@ -31,7 +32,7 @@ export async function renderGeofenceSettingsModule(container, admin) {
 function ui() {
   return `
     <div class="module-head">
-      <div><h2>ตำแหน่งบริษัท / ขอบเขตรัศมี / วันจ่ายเงิน</h2><p class="muted">กำหนดจุดลงเวลา เลือกพนักงานที่ต้องอยู่ในรัศมี และตั้งวันจ่ายเงินพนักงานรายเดือน</p></div>
+      <div><h2>ตำแหน่งบริษัท / ขอบเขตรัศมี / วันจ่ายเงิน</h2><p class="muted">กำหนดชื่อบริษัท จุดลงเวลา เลือกพนักงานที่ต้องอยู่ในรัศมี และตั้งวันจ่ายเงินพนักงานรายเดือน</p></div>
       <button id="reloadGeoBtn" class="secondary compact">โหลดใหม่</button>
     </div>
 
@@ -41,6 +42,7 @@ function ui() {
         <button id="useCurrentLocationBtn" class="secondary compact">ใช้ตำแหน่งปัจจุบัน</button>
       </div>
       <div class="form-grid tools-form">
+        <label>ชื่อบริษัท</label><input id="companyName" maxlength="100" placeholder="เช่น บริษัท ABC จำกัด">
         <label>ชื่อสถานที่</label><input id="officeName" placeholder="เช่น สำนักงานใหญ่ / โกดังบางนา">
         <label>Latitude</label><input id="officeLat" type="number" step="0.000001" placeholder="13.756331">
         <label>Longitude</label><input id="officeLng" type="number" step="0.000001" placeholder="100.501762">
@@ -95,7 +97,7 @@ function bind(admin) {
   document.getElementById("useCurrentLocationBtn").onclick = () => useCurrentLocation().catch(err => setMsg("geoSettingsMsg", "ดึงตำแหน่งไม่ได้: " + err.message));
   document.getElementById("savePaydaySettingsBtn").onclick = () => savePaydaySettings(admin).catch(err => setMsg("paydaySettingsMsg", "ผิดพลาด: " + err.message));
   document.getElementById("testPaydayNotiBtn").onclick = testPaydayNotification;
-  ["officeLat", "officeLng", "radiusMeters", "officeName"].forEach(id => document.getElementById(id).oninput = updatePreview);
+  ["officeLat", "officeLng", "radiusMeters", "officeName", "companyName"].forEach(id => document.getElementById(id).oninput = updatePreview);
   ["monthlyPaydayEnabled", "monthlyPaydayDay", "monthlyPaydayTitle", "monthlyPaydayNotifyDaysBefore"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.oninput = updatePaydayPreview;
@@ -109,6 +111,7 @@ async function loadSettings() {
 }
 
 function fillSettingsForm() {
+  setVal("companyName", currentSettings.companyName || currentSettings.officeName || "");
   setVal("officeName", currentSettings.officeName || "");
   setVal("officeLat", currentSettings.officeLat ?? "");
   setVal("officeLng", currentSettings.officeLng ?? "");
@@ -133,6 +136,7 @@ async function saveSettings(admin) {
 
   const data = {
     ...currentSettings,
+    companyName: val("companyName") || val("officeName") || "ชื่อบริษัท",
     officeName: val("officeName") || "สำนักงานใหญ่",
     officeLat,
     officeLng,
@@ -146,6 +150,7 @@ async function saveSettings(admin) {
   await db.collection(SETTINGS_COLLECTION).doc(COMPANY_DOC).set(data, { merge: true });
   currentSettings = { ...data };
   await writeLog("GEOFENCE_SETTINGS_UPDATE", admin, {
+    companyName: data.companyName,
     officeName: data.officeName,
     officeLat: data.officeLat,
     officeLng: data.officeLng,
@@ -256,13 +261,13 @@ async function updateEmployeeGeofence(employee, required) {
 }
 
 function updatePreview() {
-  const lat = val("officeLat"), lng = val("officeLng"), radius = val("radiusMeters") || "100", name = val("officeName") || "สำนักงานใหญ่";
+  const lat = val("officeLat"), lng = val("officeLng"), radius = val("radiusMeters") || "100", company = val("companyName") || val("officeName") || "ชื่อบริษัท", name = val("officeName") || "สำนักงานใหญ่";
   const link = document.getElementById("officeMapLink");
   const preview = document.getElementById("geoPreview");
   if (lat && lng) {
     link.href = `https://maps.google.com/?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}`;
     link.classList.remove("hidden");
-    preview.innerHTML = `<div class="detail-row"><b>${safeText(name)}</b><br>Lat: ${safeText(lat)} / Lng: ${safeText(lng)}<br>รัศมีที่อนุญาต: ${safeText(radius)} เมตร</div>`;
+    preview.innerHTML = `<div class="detail-row"><b>${safeText(company)}</b><br>สถานที่: ${safeText(name)}<br>Lat: ${safeText(lat)} / Lng: ${safeText(lng)}<br>รัศมีที่อนุญาต: ${safeText(radius)} เมตร</div>`;
   } else {
     link.href = "#";
     link.classList.add("hidden");
