@@ -11,14 +11,14 @@ export async function renderPayrollModule(container, employee, mode = "admin") {
     <div class="module-head">
       <div>
         <h2>Payroll & Slip</h2>
-        <p class="muted">คำนวณเงินเดือนจากสรุปรายวัน + OT ที่อนุมัติแล้ว + รายการหักเงิน</p>
+        <p class="muted">คำนวณเงินเดือนจากสรุปรายวัน + OT ที่อนุมัติแล้ว + สวัสดิการ/เงินเพิ่ม + รายการหักเงิน</p>
       </div>
     </div>
 
     <section class="card wide payroll-source-card">
       <h3>แหล่งข้อมูล Payroll</h3>
       <p class="muted small">
-        ระบบนี้ดึงข้อมูลจาก <b>attendanceSummary</b> สำหรับวันทำงาน/ชั่วโมง/มาสาย, ดึง <b>otRequests</b> เฉพาะสถานะ <b>approved</b> มาคิดค่า OT และดึง <b>payrollDeductions</b> ที่ยัง active มาหักเงินเพิ่มเติม
+        ระบบนี้ดึงข้อมูลจาก <b>attendanceSummary</b> สำหรับวันทำงาน/ชั่วโมง/มาสาย, ดึง <b>otRequests</b> เฉพาะสถานะ <b>approved</b> มาคิดค่า OT, ดึง <b>benefits</b> รายพนักงานมาบวกเงิน และดึง <b>payrollDeductions</b> ที่ยัง active มาหักเงินเพิ่มเติม
       </p>
       <div class="filters">
         <input id="payStart" type="date" value="${todayKey()}">
@@ -312,11 +312,13 @@ async function getPayrollRows(employee, mode) {
   let deductionRows = deductionSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(r => r.active !== false);
+  let benefitRows = benefits.filter(b => isBenefitEffectiveInPeriod(b, start, end));
 
   if (mode !== "admin") {
     summaryRows = summaryRows.filter(r => r.employeeId === employee.id);
     otRows = otRows.filter(r => r.employeeId === employee.id);
     deductionRows = deductionRows.filter(r => r.employeeId === employee.id);
+    benefitRows = benefitRows.filter(r => r.employeeId === employee.id);
   }
 
   const by = {};
@@ -348,6 +350,8 @@ async function getPayrollRows(employee, mode) {
       approvedOtHours: 0,
       approvedOtCount: 0,
       otDetails: [],
+      benefitRows: [],
+      benefitCount: 0,
       manualDeduct: 0,
       deductionCount: 0,
       deductionDetails: [],
@@ -402,9 +406,76 @@ async function getPayrollRows(employee, mode) {
     });
   });
 
+  benefitRows.forEach(b => {
+    const o = ensureEmployeeRow(b.employeeId, b);
+    if (!o) return;
+    o.benefitRows.push(b);
+    o.benefitCount += 1;
+  });
+
   return Object.values(by)
-    .filter(o => o.rawRows.length || o.approvedOtCount || o.deductionCount)
-    .map(o => calcPay(o, benefits, start, end));
+    .filter(o => o.rawRows.length || o.approvedOtCount || o.deductionCount || o.benefitCount)
+    .map(o => calcPay(o, start, end));
+}
+
+
+function isBenefitEffectiveInPeriod(b, start, end) {
+  if (!b || b.active === false || !b.employeeId) return false;
+  const mode = b.mode || "perWorkday";
+  if (mode === "specialOnce") {
+    const dateKey = b.dateKey || b.effectiveStart || "";
+    return !!dateKey && dateKey >= start && dateKey <= end;
+  }
+  const effectiveStart = b.effectiveStart || "0000-01-01";
+  const effectiveEnd = b.effectiveEnd || "9999-12-31";
+  return effectiveStart <= end && effectiveEnd >= start;
+}
+
+function calculateBenefitPay(o, start, end) {
+  let benefitPay = 0;
+  const benefitDetails = [];
+  (o.benefitRows || []).forEach(b => {
+    if (!isBenefitEffectiveInPeriod(b, start, end)) return;
+    const amountBase = Number(b.amount || 0);
+    if (amountBase <= 0) return;
+    const mode = b.mode || "perWorkday";
+    let amount = 0;
+    let calcText = "";
+
+    if (mode === "perWorkday") {
+      amount = amountBase * Number(o.workDays || 0);
+      calcText = `${money(amountBase)} × ${Number(o.workDays || 0)} วันทำงาน`;
+    } else if (mode === "fixedMonthly") {
+      amount = amountBase;
+      calcText = "เงินบวกรายเดือน";
+    } else if (mode === "specialOnce") {
+      amount = amountBase;
+      calcText = `เงินพิเศษวันที่ ${b.dateKey || b.effectiveStart || "-"}`;
+    }
+
+    if (amount > 0) {
+      benefitPay += amount;
+      benefitDetails.push({
+        id: b.id || "",
+        name: b.name || "สวัสดิการ",
+        mode,
+        modeText: benefitModeText(mode),
+        amount,
+        baseAmount: amountBase,
+        calcText,
+        dateKey: b.dateKey || b.effectiveStart || "",
+        effectiveStart: b.effectiveStart || "",
+        effectiveEnd: b.effectiveEnd || ""
+      });
+    }
+  });
+  return { benefitPay, benefitDetails };
+}
+
+function benefitModeText(mode) {
+  if (mode === "fixedMonthly") return "เงินบวกรายเดือน";
+  if (mode === "specialOnce") return "เงินพิเศษ";
+  return "คิดตามวันทำงาน";
 }
 
 function getOtHours(r) {
@@ -415,7 +486,7 @@ function getOtHours(r) {
   return Math.max(0, (end - start) / 36e5);
 }
 
-function calcPay(o, benefits, start, end) {
+function calcPay(o, start, end) {
   const hourly = deriveHourly(o);
 
   let basePay = 0;
@@ -432,18 +503,7 @@ function calcPay(o, benefits, start, end) {
     payNote = "รายวัน";
   }
 
-  let benefitPay = 0;
-  const benefitDetails = [];
-
-  benefits.forEach(b => {
-    let amount = 0;
-    if (b.mode === "perWorkday") amount = Number(b.amount || 0) * o.workDays;
-    if (b.mode === "fixedMonthly") amount = Number(b.amount || 0);
-    if (amount) {
-      benefitPay += amount;
-      benefitDetails.push(`${b.name || "Benefit"}: ${money(amount)}`);
-    }
-  });
+  const { benefitPay, benefitDetails } = calculateBenefitPay(o, start, end);
 
   const otPay = o.approvedOtHours * hourly * o.otMultiplier;
   const lateDeduct = o.lateMinutes * (hourly / 60);
@@ -492,8 +552,9 @@ async function loadPayroll(employee, mode) {
     const totalOtHours = rows.reduce((sum, r) => sum + Number(r.approvedOtHours || 0), 0);
     const totalOtPay = rows.reduce((sum, r) => sum + Number(r.otPay || 0), 0);
     const totalManualDeduct = rows.reduce((sum, r) => sum + Number(r.manualDeduct || 0), 0);
+    const totalBenefitPay = rows.reduce((sum, r) => sum + Number(r.benefitPay || 0), 0);
     msg.textContent = rows.length
-      ? `พบข้อมูล ${rows.length} คน • OT อนุมัติแล้ว ${totalOtHours.toFixed(2)} ชม. • ค่า OT ${money(totalOtPay)} บาท • หักเงินเพิ่ม ${money(totalManualDeduct)} บาท`
+      ? `พบข้อมูล ${rows.length} คน • เงินเพิ่ม/สวัสดิการ ${money(totalBenefitPay)} บาท • OT อนุมัติแล้ว ${totalOtHours.toFixed(2)} ชม. • ค่า OT ${money(totalOtPay)} บาท • หักเงินเพิ่ม ${money(totalManualDeduct)} บาท`
       : "ยังไม่มีข้อมูลในช่วงวันที่นี้";
     list.innerHTML = rows.length
       ? rows.map((r, i) => payrollCard(r, i)).join("")
@@ -522,6 +583,7 @@ function payrollCard(r, i) {
         <span class="badge">ชั่วโมงปกติ ${Number(r.regularHours || 0).toFixed(2)}</span>
         <span class="badge good">OT ${Number(r.approvedOtHours || 0).toFixed(2)} ชม.</span>
         <span class="badge good">ค่า OT ${money(r.otPay)}</span>
+        <span class="badge good">สวัสดิการ ${money(r.benefitPay || 0)}</span>
         <span class="badge">รายได้ ${money(r.grossPay)}</span>
         <span class="badge bad">หักเงินเพิ่ม ${money(r.manualDeduct || 0)}</span>
         <span class="badge bad">หักรวม ${money(r.totalDeduct)}</span>
@@ -537,6 +599,10 @@ function openSlip(r) {
   const otDetailHtml = r.otDetails.length
     ? `<div class="slip-ot-details"><b>รายละเอียด OT อนุมัติแล้ว</b><ul>${r.otDetails.map(o => `<li>${safeText(o.dateKey)} ${safeText(o.startTime)}-${safeText(o.endTime)} = ${Number(o.hours || 0).toFixed(2)} ชม. ${o.reason ? `• ${safeText(o.reason)}` : ""}</li>`).join("")}</ul></div>`
     : `<p class="muted">ไม่มี OT ที่อนุมัติในงวดนี้</p>`;
+
+  const benefitDetailHtml = r.benefitDetails.length
+    ? `<div class="slip-benefit-details"><b>รายละเอียดสวัสดิการ/เงินเพิ่ม</b><ul>${r.benefitDetails.map(b => `<li>${safeText(b.name)} • ${safeText(b.modeText)} • ${safeText(b.calcText)} = ${money(b.amount)} บาท</li>`).join("")}</ul></div>`
+    : `<p class="muted">ไม่มีสวัสดิการ/เงินเพิ่มในงวดนี้</p>`;
 
   const deductionDetailHtml = r.deductionDetails.length
     ? `<div class="slip-deduction-details"><b>รายละเอียดรายการหักเงิน</b><ul>${r.deductionDetails.map(d => `<li>${safeText(d.dateKey)} • หัก ${money(d.amount)} บาท • ${safeText(d.reason || "-")}</li>`).join("")}</ul></div>`
@@ -575,9 +641,9 @@ function openSlip(r) {
         <tr><th>สุทธิ</th><th>${money(r.netPay)} บาท</th></tr>
       </table>
 
+      ${benefitDetailHtml}
       ${otDetailHtml}
       ${deductionDetailHtml}
-      ${r.benefitDetails.length ? `<p class="muted">รายละเอียดเงินเพิ่ม: ${safeText(r.benefitDetails.join(", "))}</p>` : ""}
 
       <div class="signature-row">
         <div>ผู้รับเงิน<br><br>________________</div>
@@ -620,7 +686,9 @@ async function exportPayroll(employee, mode) {
     otMultiplier: r.otMultiplier,
     hourly: r.hourly,
     basePay: r.basePay,
+    benefitCount: r.benefitCount,
     benefitPay: r.benefitPay,
+    benefitDetails: (r.benefitDetails || []).map(b => `${b.name}: ${b.amount} (${b.calcText})`).join(" | "),
     otPay: r.otPay,
     grossPay: r.grossPay,
     lateDeduction: r.lateDeduct,
@@ -637,7 +705,9 @@ async function exportSlipCsv(employee, mode) {
   const rows = await getPayrollRows(employee, mode);
   exportCsv("payroll-slip-lines.csv", rows.flatMap(r => ([
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "รายได้ฐาน", amount: r.basePay },
-    { employeeCode: r.employeeCode, fullName: r.fullName, line: "สวัสดิการ/เงินเพิ่ม", amount: r.benefitPay },
+    ...(r.benefitDetails || []).length
+      ? (r.benefitDetails || []).map(b => ({ employeeCode: r.employeeCode, fullName: r.fullName, line: `สวัสดิการ/เงินเพิ่ม - ${b.name}`, amount: b.amount, detail: b.calcText }))
+      : [{ employeeCode: r.employeeCode, fullName: r.fullName, line: "สวัสดิการ/เงินเพิ่ม", amount: r.benefitPay }],
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "OT อนุมัติ", amount: r.otPay, hours: r.approvedOtHours, multiplier: r.otMultiplier },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักมาสาย", amount: -r.lateDeduct },
     { employeeCode: r.employeeCode, fullName: r.fullName, line: "หักขาดงาน", amount: -r.absentDeduct },

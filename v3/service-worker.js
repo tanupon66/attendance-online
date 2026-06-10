@@ -1,5 +1,5 @@
 
-const APP_VERSION = "3.2.8-i18n-full-coverage";
+const APP_VERSION = "3.2.9-benefits-payroll";
 const CACHE_NAME = `attendance-v${APP_VERSION}`;
 const RUNTIME_CACHE = `attendance-runtime-v${APP_VERSION}`;
 
@@ -20,6 +20,7 @@ const CORE_ASSETS = [
   "./src/modules/attendance.js",
   "./src/modules/attendance-tools.js",
   "./src/modules/geofence-settings.js",
+  "./src/modules/benefits.js",
   "./src/modules/summary.js",
   "./src/modules/calendar.js",
   "./src/modules/leave.js",

@@ -14,6 +14,7 @@ import { renderNotificationsModule } from "./modules/notifications.js";
 import { renderProfileModule } from "./modules/profile.js";
 import { renderAttendanceToolsModule } from "./modules/attendance-tools.js";
 import { renderGeofenceSettingsModule } from "./modules/geofence-settings.js";
+import { renderBenefitsModule } from "./modules/benefits.js";
 
 const appEl=document.getElementById("app");
 let currentRoute = new URLSearchParams(location.search).get("route") || "dashboard";
@@ -48,7 +49,7 @@ function bindShell(emp){
 }
 function renderApp(emp,route){currentRoute=route;emp.role==="admin"?renderAdmin(emp,route):renderEmployee(emp,route)}
 function renderAdmin(emp,route){
-  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),attendanceTools:t("attendanceTools"),geofenceSettings:t("geofenceSettings")};
+  const titleMap={dashboard:t("dashboard"),employees:t("employees"),attendance:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),benefits:t("benefits"),notifications:t("notifications"),profile:t("profile"),attendanceTools:t("attendanceTools"),geofenceSettings:t("geofenceSettings")};
   appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});translatePage(appEl);bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"admin");
@@ -60,12 +61,13 @@ function renderAdmin(emp,route){
   else if(route==="calendar")renderCalendarModule(root,emp,"admin");
   else if(route==="leave")renderLeaveModule(root,emp,"admin");
   else if(route==="payroll")renderPayrollModule(root,emp,"admin");
+  else if(route==="benefits")renderBenefitsModule(root,emp);
   else if(route==="notifications")renderNotificationsModule(root,emp,"admin");
   else if(route==="profile")renderProfileModule(root,emp);
   else root.innerHTML=`<div class="card wide"><h2>${safeText(titleMap[route]||route)}</h2><p class="muted">โมดูลนี้จะทำภายหลัง</p></div>`;
 }
 function renderEmployee(emp,route){
-  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),notifications:t("notifications"),profile:t("profile"),ot:t("requestOT")};
+  const titleMap={dashboard:t("dashboard"),clock:t("attendance"),summary:t("summary"),leave:t("leave"),calendar:t("calendar"),payroll:t("payroll"),benefits:t("benefits"),notifications:t("notifications"),profile:t("profile"),ot:t("requestOT")};
   appEl.innerHTML=shell({employee:emp,active:route,title:titleMap[route]||t("dashboard"),subtitle:`${emp.fullName||"-"} • ${nowText()}`,body:`<div id="moduleRoot"></div>`});translatePage(appEl);bindShell(emp);
   const root=document.getElementById("moduleRoot");
   if(route==="dashboard")renderDashboardModule(root,emp,"employee");

@@ -10,7 +10,7 @@ export function shell({ employee, title, subtitle, active="dashboard", body="" }
   const adminItems = [
     ["dashboard", t("dashboard"), "🏠"], ["employees", t("employees"), "👥"], ["attendance", t("attendance"), "🕒"], ["attendanceTools", t("attendanceTools"), "🧰"], ["geofenceSettings", t("geofenceSettings"), "📍"],
     ["summary", t("summary"), "📊"], ["leave", t("leave"), "🌴"], ["calendar", t("calendar"), "📅"],
-    ["payroll", t("payroll"), "💰"], ["notifications", t("notifications"), "🔔"], ["profile", t("profile"), "👤"]
+    ["payroll", t("payroll"), "💰"], ["benefits", t("benefits"), "🎁"], ["notifications", t("notifications"), "🔔"], ["profile", t("profile"), "👤"]
   ];
   const userItems = [
     ["dashboard", t("dashboard"), "🏠"], ["clock", t("attendance"), "📷"], ["ot", t("requestOT"), "⏱️"], ["summary", t("summary"), "📊"],
