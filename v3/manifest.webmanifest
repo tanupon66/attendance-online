@@ -1,9 +1,9 @@
 {
-  "name": "Attendance Online v3.2",
-  "short_name": "Attendance",
-  "description": "ระบบลงเวลาออนไลน์ Selfie GPS Payroll Leave Calendar Notifications",
-  "id": "/attendance-online/v3/",
-  "start_url": "./?v=3.2",
+  "name": "SHA Attendance v3.2.12",
+  "short_name": "SHA Attendance",
+  "description": "SHA Attendance - ระบบลงเวลา Payroll Geofence Leave Calendar Notifications",
+  "id": "/attendance-online/v3.2.12/",
+  "start_url": "./?v=3.2.12",
   "scope": "./",
   "display": "standalone",
   "display_override": [

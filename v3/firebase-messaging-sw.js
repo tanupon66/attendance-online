@@ -8,7 +8,7 @@ try {
   const messaging = firebase.messaging();
 
   messaging.onBackgroundMessage(payload => {
-    const title = payload.notification?.title || "Attendance Online";
+    const title = payload.notification?.title || "SHA Attendance";
     const options = {
       body: payload.notification?.body || "มีแจ้งเตือนใหม่",
       icon: "./icons/icon-192.png",

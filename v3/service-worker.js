@@ -1,5 +1,5 @@
 
-const APP_VERSION = "3.2.10-dashboard-company-stats";
+const APP_VERSION = "3.2.12-brand-logo";
 const CACHE_NAME = `attendance-v${APP_VERSION}`;
 const RUNTIME_CACHE = `attendance-runtime-v${APP_VERSION}`;
 
@@ -28,6 +28,13 @@ const CORE_ASSETS = [
   "./src/modules/notifications.js",
   "./src/modules/profile.js",
   "./offline/index.html",
+  "./icons/icon-72.png",
+  "./icons/icon-96.png",
+  "./icons/icon-128.png",
+  "./icons/icon-144.png",
+  "./icons/icon-152.png",
+  "./icons/icon-180.png",
+  "./icons/icon-384.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/maskable-192.png",
@@ -100,8 +107,8 @@ self.addEventListener("sync", event => {
 
 self.addEventListener("push", event => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { data = { title: "Attendance Online", body: event.data?.text() || "มีแจ้งเตือนใหม่" }; }
-  const title = data.title || "Attendance Online";
+  try { data = event.data ? event.data.json() : {}; } catch { data = { title: "SHA Attendance", body: event.data?.text() || "มีแจ้งเตือนใหม่" }; }
+  const title = data.title || "SHA Attendance";
   const options = {
     body: data.body || data.message || "มีแจ้งเตือนใหม่",
     icon: "./icons/icon-192.png",

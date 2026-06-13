@@ -2,7 +2,7 @@ import { safeText, nowText } from "../core/utils.js";
 import { t, langSelector } from "../core/i18n.js";
 
 export function renderLoading(appEl, text="กำลังโหลดระบบ..."){
-  appEl.innerHTML = `<main class="screen center"><div class="card splash"><div class="logo">A3</div><h1>Attendance Online v3</h1><p>${safeText(text)}</p></div></main>`;
+  appEl.innerHTML = `<main class="screen center"><div class="card splash"><div class="logo logo-wrap splash-logo-wrap"><img src="./icons/icon-192.png" alt="SHA Attendance" class="brand-logo"></div><h1>SHA Attendance</h1><p class="muted">Workforce • Payroll • Geofence</p><p>${safeText(text)}</p></div></main>`;
 }
 
 export function shell({ employee, title, subtitle, active="dashboard", body="" }){
@@ -21,7 +21,7 @@ export function shell({ employee, title, subtitle, active="dashboard", body="" }
   return `
     <main class="app-shell">
       <aside class="side-nav">
-        <div class="side-brand"><div class="logo small-logo">A3</div><div><b>Attendance</b><span>Enterprise v3</span></div></div>
+        <div class="side-brand"><div class="logo logo-wrap small-logo-wrap"><img src="./icons/icon-192.png" alt="SHA Attendance" class="brand-logo"></div><div><b>SHA Attendance</b><span>Workforce Suite v3.2.12</span></div></div>
         <nav>${items.map(([key,label,icon])=>`<button class="nav-btn ${active===key?"active":""}" data-route="${key}"><span>${icon}</span><b>${label}</b></button>`).join("")}</nav>
       </aside>
       <section class="main-area">

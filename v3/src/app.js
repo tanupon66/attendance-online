@@ -20,7 +20,7 @@ const appEl=document.getElementById("app");
 let currentRoute = new URLSearchParams(location.search).get("route") || "dashboard";
 
 function renderLogin(message=""){
-  appEl.innerHTML=`<main class="screen login-screen"><section class="login-card"><div class="brand-row"><div class="logo">A3</div><div><h1>${t("appName")}</h1><p class="muted">Step 7 Full Pack</p></div></div><label>${t("employeeCode")}</label><input id="loginCode" autocomplete="username" placeholder="admin หรือ 001"><label>${t("pin")}</label><input id="loginPin" type="password" autocomplete="current-password" placeholder="PIN"><button id="loginBtn" class="primary">${t("login")}</button><button id="seedAdminBtn" class="secondary">สร้างแอดมินเริ่มต้น</button><p id="loginMsg" class="message">${safeText(message)}</p></section></main>`;
+  appEl.innerHTML=`<main class="screen login-screen"><section class="login-card"><div class="brand-row"><div class="logo logo-wrap"><img src="./icons/icon-192.png" alt="SHA Attendance" class="brand-logo"></div><div><h1>${t("appName")}</h1><p class="muted">Workforce Suite v3.2.12</p></div></div><label>${t("employeeCode")}</label><input id="loginCode" autocomplete="username" placeholder="admin หรือ 001"><label>${t("pin")}</label><input id="loginPin" type="password" autocomplete="current-password" placeholder="PIN"><button id="loginBtn" class="primary">${t("login")}</button><button id="seedAdminBtn" class="secondary">สร้างแอดมินเริ่มต้น</button><p id="loginMsg" class="message">${safeText(message)}</p></section></main>`;
   translatePage(appEl);
   document.getElementById("loginBtn").onclick=login;
   document.getElementById("seedAdminBtn").onclick=seedAdmin;
